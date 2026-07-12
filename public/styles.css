@@ -904,7 +904,7 @@ html.returning-user #authScreen { display: none; }
   padding: 76px 24px 22px;
   background: linear-gradient(180deg, rgba(10,3,31,.24), rgba(10,3,31,.92)), var(--profile-banner, url("/assets/profile-banner.svg")) center / cover;
 }
-.profile-cover img { width: 110px; height: 110px; border: 4px solid rgba(255,255,255,.22); border-radius: 50%; object-fit: cover; }
+.profile-cover > img { width: 110px; height: 110px; border: 4px solid rgba(255,255,255,.22); border-radius: 50%; object-fit: cover; }
 .profile-cover h2 { margin: 8px 0 4px; font-size: 2rem; }
 .profile-tabs { display: flex; gap: 8px; padding: 12px 20px; background: rgba(255,255,255,.08); }
 .profile-tabs button { border: 0; border-radius: 12px; padding: 10px 16px; color: var(--text); background: transparent; font-weight: 800; }
@@ -2803,6 +2803,117 @@ html.returning-user #authScreen { display: none; }
   border-radius: 50%;
   color: #fff;
   background: rgba(15, 23, 42, .84);
+}
+
+/* Compact profile, bot messages, and editor refinements. */
+.message.message-system {
+  grid-template-columns: 42px minmax(0, max-content);
+  justify-content: start;
+  contain: none;
+}
+.message-system .message-card,
+.message-intruder .message-card {
+  width: fit-content !important;
+  max-width: min(410px, calc(100vw - 92px)) !important;
+  min-height: 0;
+  align-self: start;
+  justify-self: start;
+}
+.message-system .message-body { width: fit-content; }
+.intruder-card {
+  display: grid;
+  width: fit-content;
+  max-width: 340px;
+  gap: 4px;
+  align-items: start;
+  padding: 9px 11px;
+}
+.intruder-card strong { font-size: .78rem; }
+.intruder-card span { line-height: 1.35; }
+.intruder-card b { color: #fff; }
+
+.profile-modal { width: min(480px, calc(100% - 24px)); }
+.profile-cover {
+  min-height: 268px;
+  padding: 78px 22px 20px;
+}
+.profile-avatar-wrap {
+  width: 92px;
+  height: 92px;
+  margin-bottom: 10px;
+}
+.profile-avatar-wrap img,
+.profile-cover > img {
+  width: 92px;
+  height: 92px;
+}
+.profile-cover h2 { font-size: 1.65rem; }
+.profile-quote { margin-top: 10px; line-height: 1.4; }
+.profile-main-actions { margin-top: 13px; }
+#profileRankLine .rank-pill img {
+  width: 12px;
+  height: 12px;
+  margin: 0 4px 0 0;
+  border: 0;
+  box-shadow: none;
+}
+.profile-tab { padding: 14px; }
+.profile-overview-card { padding: 14px; }
+.profile-detail-bubbles article { min-height: 68px; border-radius: 14px; padding: 11px; }
+
+.edit-profile-modal { width: min(560px, calc(100% - 24px)); }
+.edit-profile-modal .stack-form { gap: 12px; }
+.edit-profile-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.025));
+}
+.edit-section-heading { display: grid; gap: 3px; }
+.edit-section-heading strong { color: #f8fafc; font-size: .96rem; }
+.edit-section-heading small,
+.edit-profile-modal label small { color: #8f9bad; font-size: .72rem; }
+.edit-name-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.edit-profile-modal input,
+.edit-profile-modal textarea,
+.edit-profile-modal select {
+  border-color: rgba(255,255,255,.11);
+  border-radius: 12px;
+  background: rgba(5,10,17,.58);
+}
+.edit-field-grid.compact-fields { grid-template-columns: 1.25fr .55fr .8fr; }
+.tool-range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.tool-range-grid input,
+.tool-range-grid select { width: 100%; max-width: none; }
+.value-change-card { border-color: rgba(34,211,238,.2); }
+
+.image-lightbox {
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+}
+.image-lightbox:not([open]) { display: none; }
+.image-lightbox::backdrop { background: rgba(2, 6, 23, .88); backdrop-filter: blur(8px); }
+
+@media (max-width: 620px) {
+  .message.message-system { grid-template-columns: 44px minmax(0, max-content); }
+  .edit-name-grid,
+  .edit-field-grid.compact-fields,
+  .tool-range-grid { grid-template-columns: 1fr; }
+  .profile-counter-row { max-width: calc(100% - 110px); overflow-x: auto; }
 }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
