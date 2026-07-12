@@ -146,9 +146,11 @@ router.patch("/users/:id", async (req, res) => {
     if (req.body.avatarUrl !== undefined) updates.avatar_url = String(req.body.avatarUrl).slice(0, 500);
     if (req.body.bannerUrl !== undefined) updates.banner_url = String(req.body.bannerUrl).slice(0, 500);
   }
-  if (req.body.gold !== undefined) updates.gold = Number(req.body.gold);
-  if (req.body.diamonds !== undefined) updates.diamonds = Number(req.body.diamonds);
-  if (req.body.xp !== undefined) updates.xp = Number(req.body.xp);
+  if (req.user.rank_name === "developer") {
+    if (req.body.gold !== undefined) updates.gold = Number(req.body.gold);
+    if (req.body.diamonds !== undefined) updates.diamonds = Number(req.body.diamonds);
+    if (req.body.xp !== undefined) updates.xp = Number(req.body.xp);
+  }
   const entries = Object.entries(updates);
   if (entries.length) {
     try {
@@ -376,9 +378,38 @@ router.post("/tools/access", developerOnly, async (req, res) => {
 
 router.post("/tools/intruder", requireIntruderTool, async (req, res) => {
   const enabled = Boolean(req.body.enabled);
-  const state = await updateIntruderSettings({ enabled, intervalMinutes: req.body.intervalMinutes });
+  const state = await updateIntruderSettings({
+    enabled,
+    minIntervalMinutes: req.body.minIntervalMinutes,
+    maxIntervalMinutes: req.body.maxIntervalMinutes,
+    intervalMinutes: req.body.intervalMinutes,
+  });
   await log(req.user.id, enabled ? "intruder_start" : "intruder_stop", "tool", null, JSON.stringify(state.intruder));
   res.json(state);
+});
+
+router.post("/tools/user-values", developerOnly, async (req, res) => {
+  const userId = Number(req.body.userId);
+  const field = String(req.body.field || "");
+  const value = Math.floor(Number(req.body.value));
+  if (!userId || !["gold", "diamonds", "xp", "shoot"].includes(field)) return res.status(400).json({ error: "Choose a user and value to change." });
+  if (!Number.isFinite(value) || value < 0 || value > 2000000000) return res.status(400).json({ error: "Value must be between 0 and 2,000,000,000." });
+  const [[target]] = await pool.query("SELECT id, username FROM users WHERE id = ? AND rank_name <> 'bot'", [userId]);
+  if (!target) return res.status(404).json({ error: "User not found." });
+  if (field === "shoot") {
+    await pool.query(
+      `INSERT INTO intruder_scores (user_id, points, shots)
+       VALUES (?, ?, 0)
+       ON DUPLICATE KEY UPDATE points = VALUES(points)`,
+      [userId, value]
+    );
+    broadcast("intruder-score-updated", { userId });
+  } else {
+    await pool.query(`UPDATE users SET ${field} = ? WHERE id = ?`, [value, userId]);
+    broadcast("users-changed", { userId });
+  }
+  await log(req.user.id, "developer_change_value", "user", userId, `${field}:${value}`);
+  res.json({ ok: true, userId, field, value });
 });
 
 router.post("/tools/intruder/reset", requireIntruderTool, async (req, res) => {
