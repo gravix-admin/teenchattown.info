@@ -122,7 +122,7 @@ async function getMainRoom() {
 
 async function messageById(messageId) {
   const [rows] = await pool.query(
-    `SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style
+    `SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame
      FROM messages m
      JOIN users u ON u.id = m.user_id
      WHERE m.id = ?`,
@@ -339,4 +339,3 @@ module.exports = {
   startIntruderLoop,
   updateIntruderSettings,
 };
-
