@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const pool = require("../database");
-const { requireAuth, canControl, isStaff, rankPower } = require("../middleware/auth");
+const { requireAuth, canControl, isStaff, rankPower, invalidateUserCache } = require("../middleware/auth");
 const { adminStats } = require("../services/userService");
 const { ranks, staffTools } = require("../services/schema");
 const { broadcast, notifyUser } = require("../services/events");
@@ -160,6 +160,7 @@ router.patch("/users/:id", async (req, res) => {
       throw error;
     }
   }
+  invalidateUserCache(target.id);
   await log(req.user.id, "update_user", "user", target.id, JSON.stringify(updates));
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
@@ -199,6 +200,7 @@ router.post("/users/:id/moderate", async (req, res) => {
   } else {
     return res.status(400).json({ error: "Unknown action." });
   }
+  invalidateUserCache(target.id);
   await log(req.user.id, action, "user", target.id, reason);
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
@@ -238,6 +240,7 @@ router.post("/users/:id/profile-edit", requireProfileEditTool, async (req, res) 
     return res.status(400).json({ error: "Unknown edit action." });
   }
 
+  invalidateUserCache(target.id);
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
 });
@@ -406,6 +409,7 @@ router.post("/tools/user-values", developerOnly, async (req, res) => {
     broadcast("intruder-score-updated", { userId });
   } else {
     await pool.query(`UPDATE users SET ${field} = ? WHERE id = ?`, [value, userId]);
+    invalidateUserCache(userId);
     broadcast("users-changed", { userId });
   }
   await log(req.user.id, "developer_change_value", "user", userId, `${field}:${value}`);
