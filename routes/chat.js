@@ -5,6 +5,7 @@ const { requireAuth, isStaff, rankPower } = require("../middleware/auth");
 const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { addClient, removeClient, broadcast, notifyUser } = require("../services/events");
 const { INTRUDER_PREFIX, handlePossibleShot } = require("../services/intruderService");
+const { BET_PREFIX, handleBetCommand } = require("../services/betService");
 const { publicUser } = require("../services/userService");
 
 const router = express.Router();
@@ -50,7 +51,8 @@ async function canDeletePrivateChats(user) {
 }
 
 function isProtectedSystemBody(body) {
-  return String(body || "").startsWith(INTRUDER_PREFIX);
+  const value = String(body || "");
+  return value.startsWith(INTRUDER_PREFIX) || value.startsWith(BET_PREFIX);
 }
 
 async function isProtectedSystemMessage(message) {
@@ -82,7 +84,7 @@ router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 20), 80);
   const [rows] = await pool.query(
     `SELECT recent.* FROM (
-       SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style,
+       SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame,
         (SELECT JSON_ARRAYAGG(JSON_OBJECT('emoji', emoji, 'count', count)) FROM (
           SELECT emoji, COUNT(*) AS count FROM message_reactions WHERE message_id = m.id GROUP BY emoji
         ) r) AS reactions
@@ -103,6 +105,17 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
   if (req.file && !(await hasTool(req.user, "sendFiles"))) return res.status(403).json({ error: "Your rank cannot send files." });
   let body = String(req.body.body || "").trim().slice(0, 1200);
   if (!body && !req.file) return res.status(400).json({ error: "Message or attachment required." });
+  if (/^\/bet(?:\s|$)/i.test(body)) {
+    if (req.file) return res.status(400).json({ error: "The /bet command cannot include an attachment." });
+    const match = body.match(/^\/bet\s+["']?(\d+)["']?\s*$/i);
+    if (!match) return res.status(400).json({ error: 'Use /bet "gold amount".' });
+    try {
+      const result = await handleBetCommand(req.params.roomId, req.user, match[1]);
+      return res.status(result.private ? 200 : 201).json(result);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || "Bet could not be placed." });
+    }
+  }
   if (req.body.replyToId) {
     const [[replyTarget]] = await pool.query("SELECT id, user_id, body FROM messages WHERE id = ?", [req.body.replyToId]);
     if (await isProtectedSystemMessage(replyTarget)) return res.status(403).json({ error: "System bot messages cannot be replied to." });
@@ -119,19 +132,23 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     "INSERT INTO messages (room_id, user_id, body, attachment_url, attachment_type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
     [req.params.roomId, req.user.id, body, attachmentUrl, req.file?.mimetype || null, req.body.replyToId || null]
   );
-  await pool.query("UPDATE users SET message_count = message_count + 1, xp = xp + IF((message_count + 1) % 2 = 0, 1, 0), gold = gold + IF((message_count + 1) % 10 = 0, 100, 0) WHERE id = ?", [req.user.id]);
-  await pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'first_message'", [req.user.id]);
-  await pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'ten_messages' AND (SELECT message_count FROM users WHERE id = ?) >= 10", [req.user.id, req.user.id]);
   const [rows] = await pool.query(
-    `SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style
+    `SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame
      FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?`,
     [result.insertId]
   );
   broadcast("message", rows[0]);
+  res.status(201).json(rows[0]);
+  (async () => {
+    await pool.query("UPDATE users SET message_count = message_count + 1, xp = xp + IF((message_count + 1) % 2 = 0, 1, 0), gold = gold + IF((message_count + 1) % 10 = 0, 100, 0) WHERE id = ?", [req.user.id]);
+    await Promise.all([
+      pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'first_message'", [req.user.id]),
+      pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'ten_messages' AND (SELECT message_count FROM users WHERE id = ?) >= 10", [req.user.id, req.user.id]),
+    ]);
+  })().catch((error) => console.error("[message rewards] update failed:", error.message));
   handlePossibleShot(rows[0], req.user).catch((error) => {
     console.error("[intruder] shot handling failed:", error.message);
   });
-  res.status(201).json(rows[0]);
 });
 
 router.delete("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req, res) => {
