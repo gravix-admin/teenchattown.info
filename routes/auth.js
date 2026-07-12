@@ -152,7 +152,7 @@ router.get("/users", requireAuth, async (req, res) => {
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const allowed = ["displayName", "bio", "aboutMe", "mood", "theme", "chatBackground", "bubbleStyle", "usernameColor", "textColor", "frame", "profileMusicUrl", "animatedBannerUrl", "profileTitle", "profileStatus", "profileAccent", "showOnlineStatus"];
+  const allowed = ["displayName", "bio", "aboutMe", "mood", "theme", "chatBackground", "bubbleStyle", "usernameColor", "textColor", "animatedBannerUrl", "profileTitle", "profileStatus", "profileAccent", "showOnlineStatus"];
   const data = {};
   const limits = { displayName: 40, bio: 120, chatBackground: 40, profileTitle: 80, profileStatus: 40, profileAccent: 24, aboutMe: 1500 };
   const allowedChatBackgrounds = new Set(["moonlake", "autumn", "neon-city", "sunrise"]);
@@ -188,7 +188,6 @@ router.patch("/me", requireAuth, async (req, res) => {
     bubbleStyle: "bubble_style",
     usernameColor: "username_color",
     textColor: "text_color",
-    profileMusicUrl: "profile_music_url",
     animatedBannerUrl: "animated_banner_url",
     profileTitle: "profile_title",
     profileStatus: "profile_status",
