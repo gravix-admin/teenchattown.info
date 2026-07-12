@@ -2,8 +2,9 @@ const bcrypt = require("bcrypt");
 const pool = require("../database");
 const { broadcast } = require("./events");
 
-const DEFAULT_INTERVAL_MINUTES = 5;
-const MIN_INTERVAL_MINUTES = 5;
+const DEFAULT_MIN_INTERVAL_MINUTES = 2;
+const DEFAULT_MAX_INTERVAL_MINUTES = 6;
+const MIN_INTERVAL_MINUTES = 2;
 const MAX_INTERVAL_MINUTES = 1440;
 const BOT_NAME = "Intruder";
 const BOT_AVATAR = "/assets/intruder-bot.png";
@@ -17,11 +18,16 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sanitizeInterval(value) {
+function sanitizeInterval(value, fallback = DEFAULT_MIN_INTERVAL_MINUTES) {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return DEFAULT_INTERVAL_MINUTES;
-  const roundedToFive = Math.round(numeric / 5) * 5;
-  return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, roundedToFive || DEFAULT_INTERVAL_MINUTES));
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.round(numeric) || fallback));
+}
+
+function sanitizeRange(minValue, maxValue) {
+  const min = sanitizeInterval(minValue, DEFAULT_MIN_INTERVAL_MINUTES);
+  const max = sanitizeInterval(maxValue, DEFAULT_MAX_INTERVAL_MINUTES);
+  return min <= max ? { min, max } : { min: max, max: min };
 }
 
 function randomPoints() {
@@ -54,15 +60,10 @@ function toIso(value) {
   return date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
 }
 
-function nextAlignedDate(intervalMinutes, from = new Date()) {
-  const interval = sanitizeInterval(intervalMinutes);
-  const next = new Date(from);
-  const currentMinutes = next.getUTCMinutes();
-  const remainder = currentMinutes % interval;
-  const addMinutes = remainder === 0 ? interval : interval - remainder;
-  next.setUTCSeconds(0, 0);
-  next.setUTCMinutes(currentMinutes + addMinutes);
-  return next;
+function randomNextDate(minMinutes, maxMinutes, from = new Date()) {
+  const range = sanitizeRange(minMinutes, maxMinutes);
+  const delaySeconds = Math.floor((range.min * 60) + Math.random() * (((range.max - range.min) * 60) + 1));
+  return new Date(from.getTime() + delaySeconds * 1000);
 }
 
 function intruderBody(payload) {
@@ -93,8 +94,8 @@ async function ensureBotUser() {
 async function ensureSettings() {
   const botUserId = await ensureBotUser();
   await pool.query(
-    "INSERT IGNORE INTO intruder_settings (id, enabled, interval_minutes, bot_user_id, bot_name, bot_avatar_url) VALUES (1, 0, ?, ?, ?, ?)",
-    [DEFAULT_INTERVAL_MINUTES, botUserId, BOT_NAME, BOT_AVATAR]
+    "INSERT IGNORE INTO intruder_settings (id, enabled, interval_minutes, min_interval_minutes, max_interval_minutes, bot_user_id, bot_name, bot_avatar_url) VALUES (1, 0, ?, ?, ?, ?, ?, ?)",
+    [DEFAULT_MAX_INTERVAL_MINUTES, DEFAULT_MIN_INTERVAL_MINUTES, DEFAULT_MAX_INTERVAL_MINUTES, botUserId, BOT_NAME, BOT_AVATAR]
   );
   await pool.query(
     "UPDATE intruder_settings SET bot_user_id = ?, bot_name = ?, bot_avatar_url = ? WHERE id = 1",
@@ -154,6 +155,13 @@ async function resolveExpiredRounds() {
     );
     if (result.affectedRows) {
       await sendBotMessage(round.room_id, { type: "survived" });
+      const settings = await getSettings();
+      if (settings.enabled) {
+        const nextSpawn = randomNextDate(settings.min_interval_minutes, settings.max_interval_minutes);
+        await pool.query("UPDATE intruder_settings SET next_spawn_at = ? WHERE id = 1", [mysqlUtc(nextSpawn)]);
+      } else {
+        await pool.query("UPDATE intruder_settings SET next_spawn_at = NULL WHERE id = 1");
+      }
     }
   }
 }
@@ -176,8 +184,7 @@ async function spawnIntruderRound(settings) {
     await pool.query("UPDATE intruder_rounds SET message_id = ? WHERE id = ?", [message.id, result.insertId]);
   }
 
-  const nextSpawn = nextAlignedDate(settings.interval_minutes);
-  await pool.query("UPDATE intruder_settings SET next_spawn_at = ? WHERE id = 1", [mysqlUtc(nextSpawn)]);
+  await pool.query("UPDATE intruder_settings SET next_spawn_at = NULL WHERE id = 1");
 }
 
 async function tick() {
@@ -189,7 +196,9 @@ async function tick() {
     if (!settings.enabled) return;
 
     if (!settings.next_spawn_at) {
-      const nextSpawn = nextAlignedDate(settings.interval_minutes);
+      const [[active]] = await pool.query("SELECT id FROM intruder_rounds WHERE status = 'active' AND ends_at > UTC_TIMESTAMP() LIMIT 1");
+      if (active) return;
+      const nextSpawn = randomNextDate(settings.min_interval_minutes, settings.max_interval_minutes);
       await pool.query("UPDATE intruder_settings SET next_spawn_at = ? WHERE id = 1", [mysqlUtc(nextSpawn)]);
       return;
     }
@@ -224,19 +233,20 @@ function startIntruderLoop() {
   scheduleTick(1500);
 }
 
-async function updateIntruderSettings({ enabled, intervalMinutes }) {
+async function updateIntruderSettings({ enabled, minIntervalMinutes, maxIntervalMinutes, intervalMinutes }) {
   await ensureSettings();
-  const interval = sanitizeInterval(intervalMinutes);
+  const legacy = sanitizeInterval(intervalMinutes, DEFAULT_MAX_INTERVAL_MINUTES);
+  const range = sanitizeRange(minIntervalMinutes ?? legacy, maxIntervalMinutes ?? legacy);
   if (enabled) {
-    const nextSpawn = nextAlignedDate(interval);
+    const nextSpawn = randomNextDate(range.min, range.max);
     await pool.query(
-      "UPDATE intruder_settings SET enabled = 1, interval_minutes = ?, next_spawn_at = ? WHERE id = 1",
-      [interval, mysqlUtc(nextSpawn)]
+      "UPDATE intruder_settings SET enabled = 1, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, next_spawn_at = ? WHERE id = 1",
+      [range.max, range.min, range.max, mysqlUtc(nextSpawn)]
     );
   } else {
-    await pool.query("UPDATE intruder_settings SET enabled = 0, interval_minutes = ?, next_spawn_at = NULL WHERE id = 1", [interval]);
+    await pool.query("UPDATE intruder_settings SET enabled = 0, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, next_spawn_at = NULL WHERE id = 1", [range.max, range.min, range.max]);
   }
-  broadcast("intruder-settings-updated", { enabled: Boolean(enabled), intervalMinutes: interval });
+  broadcast("intruder-settings-updated", { enabled: Boolean(enabled), minIntervalMinutes: range.min, maxIntervalMinutes: range.max });
   return getIntruderState();
 }
 
@@ -263,8 +273,9 @@ async function getIntruderState() {
   return {
     intruder: {
       enabled: Boolean(settings.enabled),
-      intervalMinutes: sanitizeInterval(settings.interval_minutes),
-      nextSpawnAt: toIso(settings.next_spawn_at),
+      minIntervalMinutes: sanitizeRange(settings.min_interval_minutes, settings.max_interval_minutes).min,
+      maxIntervalMinutes: sanitizeRange(settings.min_interval_minutes, settings.max_interval_minutes).max,
+      nextSpawnAt: settings.enabled ? toIso(settings.next_spawn_at) : null,
       botName: settings.bot_name || BOT_NAME,
       botAvatarUrl: settings.bot_avatar_url || BOT_AVATAR,
       activeRound: activeRows[0] ? {
@@ -311,6 +322,11 @@ async function handlePossibleShot(message, shooter) {
     total: score?.points || round.points,
     shots: score?.shots || 1,
   });
+  const settings = await getSettings();
+  if (settings.enabled) {
+    const nextSpawn = randomNextDate(settings.min_interval_minutes, settings.max_interval_minutes);
+    await pool.query("UPDATE intruder_settings SET next_spawn_at = ? WHERE id = 1", [mysqlUtc(nextSpawn)]);
+  }
   broadcast("intruder-score-updated", { userId: shooter.id });
   return true;
 }
@@ -323,3 +339,4 @@ module.exports = {
   startIntruderLoop,
   updateIntruderSettings,
 };
+
