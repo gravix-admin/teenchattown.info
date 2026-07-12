@@ -1,6 +1,27 @@
 const jwt = require("jsonwebtoken");
 const pool = require("../database");
 
+const USER_CACHE_TTL_MS = 15000;
+const userCache = new Map();
+
+function cachedUser(id, tokenVersion) {
+  const cached = userCache.get(Number(id));
+  if (!cached || cached.expiresAt <= Date.now() || Number(cached.user.token_version || 0) !== Number(tokenVersion || 0)) {
+    if (cached) userCache.delete(Number(id));
+    return null;
+  }
+  return cached.user;
+}
+
+function cacheUser(user) {
+  if (user?.id) userCache.set(Number(user.id), { user, expiresAt: Date.now() + USER_CACHE_TTL_MS });
+  return user;
+}
+
+function invalidateUserCache(userId) {
+  userCache.delete(Number(userId));
+}
+
 function tokenFromRequest(req) {
   const header = req.headers.authorization || "";
   if (header.startsWith("Bearer ")) return header.slice(7);
@@ -14,8 +35,11 @@ async function attachUser(req, _res, next) {
   if (!token) return next();
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [payload.id]);
-    req.user = rows[0] || null;
+    req.user = cachedUser(payload.id, payload.v);
+    if (!req.user) {
+      const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [payload.id]);
+      req.user = cacheUser(rows[0] || null);
+    }
     if (req.user && Number(payload.v || 0) !== Number(req.user.token_version || 0)) req.user = null;
   } catch (error) {
     if (pool.isTransientDatabaseError?.(error)) {
@@ -64,4 +88,4 @@ function isStaff(user) {
   return ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(user?.rank_name);
 }
 
-module.exports = { attachUser, requireAuth, canControl, isStaff, rankPower };
+module.exports = { attachUser, requireAuth, canControl, isStaff, rankPower, invalidateUserCache, cacheUser };
