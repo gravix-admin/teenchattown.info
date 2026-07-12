@@ -131,7 +131,6 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
   handlePossibleShot(rows[0], req.user).catch((error) => {
     console.error("[intruder] shot handling failed:", error.message);
   });
-  broadcast("users-changed", { userId: req.user.id });
   res.status(201).json(rows[0]);
 });
 
