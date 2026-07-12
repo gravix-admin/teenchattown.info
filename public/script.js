@@ -29,6 +29,7 @@ const state = {
   pmExpanded: false,
   permissions: {},
   usersRefreshTimer: null,
+  messagesRefreshTimer: null,
   typingTimer: null,
   bootstrapPromise: null,
   syncing: false,
@@ -37,8 +38,15 @@ const state = {
   newsCache: null,
   newsCacheAt: 0,
   leaderboardCache: {},
+  profileCache: new Map(),
+  storeCache: null,
+  framePickerOpen: false,
+  usersCacheAt: 0,
+  friendsCacheAt: 0,
+  profileRequestId: 0,
   socket: null,
   eventSource: null,
+  inflightGets: new Map(),
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -48,6 +56,7 @@ const rankOrder = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "m
 const assignableRanks = rankOrder.filter((rank) => rank !== "bot");
 const systemUsernames = new Set(["intruder", "zombie"]);
 const slashCommands = [
+  ["/bet", "Bet gold: /bet 100 (3 minute cooldown)"],
   ["/clear", "Staff: clear the current room"],
   ["@wb username", "Send a welcome back message"],
   ["/gif", "Search a GIF"],
@@ -72,6 +81,15 @@ const roomBackgroundChoices = [
 ];
 const roomBackgroundUrls = Object.fromEntries(roomBackgroundChoices.map(([id, _label, url]) => [id, url]));
 const intruderPrefix = "::intruder:";
+const betPrefix = "::bet:";
+const profileFrameAssets = {
+  cosmic: "/assets/frame-cosmic.png",
+  solar: "/assets/frame-solar.png",
+  prism: "/assets/frame-prism.png",
+  gothic: "/assets/frame-gothic.png",
+  angelic: "/assets/frame-angelic.png",
+  "classic-gold": "/assets/frame-classic-gold.png",
+};
 
 function roomLocked(room) {
   return Boolean(room?.locked || room?.password_hash);
@@ -81,7 +99,10 @@ function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
-  return fetch(path, { ...options, headers }).then(async (response) => {
+  const method = String(options.method || "GET").toUpperCase();
+  const getKey = `${path}|${options.cache || "default"}`;
+  if (method === "GET" && state.inflightGets.has(getKey)) return state.inflightGets.get(getKey);
+  const request = fetch(path, { ...options, headers }).then(async (response) => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(data.error || "Request failed");
@@ -91,6 +112,11 @@ function api(path, options = {}) {
     }
     return data;
   });
+  if (method === "GET") {
+    state.inflightGets.set(getKey, request);
+    request.then(() => state.inflightGets.delete(getKey), () => state.inflightGets.delete(getKey));
+  }
+  return request;
 }
 
 function html(value) {
@@ -157,6 +183,17 @@ function avatar(user) {
   return user?.avatarUrl || user?.avatar_url || `/assets/avatar-${user?.gender || "other"}.svg`;
 }
 
+function profileFrame(user) {
+  const frame = String(user?.frame || "");
+  return profileFrameAssets[frame] ? frame : "";
+}
+
+function framedAvatar(user, imageClass = "avatar", extra = "") {
+  const frame = profileFrame(user);
+  const style = frame ? ` style="--avatar-frame:url('${profileFrameAssets[frame]}')"` : "";
+  return `<span class="avatar-frame ${frame ? "has-frame" : ""}"${style}><img class="${html(imageClass)}" src="${html(avatar(user))}" alt="" ${extra} /></span>`;
+}
+
 function usernameKey(user) {
   return String(user?.username || user?.displayName || user?.display_name || "").trim().toLowerCase();
 }
@@ -172,6 +209,11 @@ function isIntruderUser(user) {
 
 function isIntruderMessage(message, user = {}) {
   return isIntruderUser(user) || String(message?.body || "").startsWith(intruderPrefix);
+}
+
+function isProtectedSystemMessage(message, user = {}) {
+  const body = String(message?.body || "");
+  return isSystemBot(user) || body.startsWith(intruderPrefix) || body.startsWith(betPrefix);
 }
 
 function userById(id) {
@@ -260,6 +302,7 @@ function setView(view) {
     renderNews().catch((error) => toast(error.message));
   }
   if (view === "leaderboard") renderLeaderboard().catch((error) => toast(error.message));
+  if (view === "chatStore") renderChatStore().catch((error) => toast(error.message));
 }
 
 function setBadges() {
@@ -435,6 +478,7 @@ async function bootstrap() {
     }
     state.rooms = data.rooms || [];
     state.users = data.users || [];
+    state.usersCacheAt = Date.now();
     state.notifications = data.notifications || [];
     state.friendRequests = data.friendRequests || [];
     state.rankBadges = data.rankBadges || {};
@@ -565,6 +609,11 @@ async function loadMessages() {
   }
 }
 
+function scheduleMessagesRefresh() {
+  clearTimeout(state.messagesRefreshTimer);
+  state.messagesRefreshTimer = setTimeout(() => loadMessages().catch(() => {}), 250);
+}
+
 function parseReactions(raw) {
   if (Array.isArray(raw)) return raw.filter(Boolean);
   if (!raw) return [];
@@ -586,20 +635,21 @@ function renderMessages() {
       textColor: message.text_color,
       bubbleStyle: message.bubble_style,
       profileTitle: message.profile_title,
+      frame: message.frame,
     };
-    const protectedSystemMessage = isIntruderMessage(message, user);
+    const protectedSystemMessage = isProtectedSystemMessage(message, user);
     const reply = message.reply_to_id ? state.messages.find((item) => Number(item.id) === Number(message.reply_to_id)) : null;
     const isOwn = Number(message.user_id) === Number(state.me.id);
     const canModify = !protectedSystemMessage && (isOwn || staffRanks.has(state.me.rank));
     const reactions = parseReactions(message.reactions);
     const bubbleClass = ["vip", "premium"].includes(user.bubbleStyle) ? ` bubble-${user.bubbleStyle}` : "";
     const avatarMarkup = protectedSystemMessage
-      ? `<span class="message-avatar-button system-avatar" title="System bot"><img class="avatar" src="${html(avatar(user))}" alt="" loading="lazy" decoding="async" /></span>`
-      : `<button class="message-avatar-button" data-message-profile="${message.user_id}" type="button" title="View profile"><img class="avatar" src="${html(avatar(user))}" alt="" loading="lazy" decoding="async" /></button>`;
+      ? `<span class="message-avatar-button system-avatar" title="System bot">${framedAvatar(user, "avatar", 'loading="lazy" decoding="async"')}</span>`
+      : `<button class="message-avatar-button" data-message-profile="${message.user_id}" type="button" title="View profile">${framedAvatar(user, "avatar", 'loading="lazy" decoding="async"')}</button>`;
     const authorMarkup = protectedSystemMessage
       ? `<span class="message-author system-author" style="${user.usernameColor ? `color:${html(user.usernameColor)}` : ""}">${html(user.username)}</span>`
       : `<button class="message-author" data-tag-user="${html(user.username)}" type="button" style="${user.usernameColor ? `color:${html(user.usernameColor)}` : ""}">${html(user.username)}</button>`;
-    const menuMarkup = protectedSystemMessage ? "" : `
+    const menuMarkup = protectedSystemMessage || message.pending ? "" : `
       <div class="message-menu-wrap">
         <button class="message-menu-button" data-message-menu="${message.id}" type="button" title="Message options"><svg viewBox="0 0 24 24"><path d="M6 12a2 2 0 1 0-4 0 2 2 0 0 0 4 0Zm8 0a2 2 0 1 0-4 0 2 2 0 0 0 4 0Zm8 0a2 2 0 1 0-4 0 2 2 0 0 0 4 0Z"/></svg></button>
         <div class="message-menu hidden" data-menu-for="${message.id}">
@@ -610,7 +660,7 @@ function renderMessages() {
       </div>
     `;
     return `
-      <article class="message ${isOwn ? "own" : ""}${protectedSystemMessage ? " message-system message-intruder" : ""}${bubbleClass}" data-message-id="${message.id}">
+      <article class="message ${isOwn ? "own" : ""}${protectedSystemMessage ? " message-system message-intruder" : ""}${message.pending ? " message-pending" : ""}${bubbleClass}" data-message-id="${message.id}">
         ${avatarMarkup}
         <div class="message-card" style="--message-color:${html(user.textColor || "#fbf7ff")}">
           <div class="message-topline">
@@ -658,7 +708,23 @@ function renderIntruderMessage(payload) {
   return "";
 }
 
+function renderBetMessage(payload) {
+  const username = html(payload?.username || "A user");
+  const amount = compactNumber(Number(payload?.amount || 0));
+  const result = compactNumber(Number(payload?.resultAmount || 0));
+  if (payload?.outcome === "lost") return `<div class="bet-card bet-lost"><strong>${username} bet ${amount} gold</strong><span>Lost — result: ${result} gold</span></div>`;
+  if (payload?.outcome === "neutral") return `<div class="bet-card bet-neutral"><strong>${username} bet ${amount} gold</strong><span>Neither won nor lost — result: ${result} gold</span></div>`;
+  return `<div class="bet-card bet-won"><strong>${username} bet ${amount} gold</strong><span>Won ${Number(payload?.multiplier || 1)}× — result: ${result} gold</span></div>`;
+}
+
 function renderMessageBody(body, user = {}) {
+  if (body.startsWith(betPrefix)) {
+    try {
+      return renderBetMessage(JSON.parse(body.slice(betPrefix.length))) || "";
+    } catch (_error) {
+      return "";
+    }
+  }
   if (String(user.username || "").toLowerCase() === "intruder" && body.startsWith(intruderPrefix)) {
     try {
       return renderIntruderMessage(JSON.parse(body.slice(intruderPrefix.length))) || "";
@@ -772,7 +838,6 @@ function bindMessageActions() {
   $$("[data-react]").forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     await api(`/api/chat/messages/${button.dataset.react}/reactions`, { method: "POST", body: JSON.stringify({ emoji: button.dataset.emoji }) });
-    await loadMessages();
   }));
   $$("[data-edit]").forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
@@ -780,20 +845,17 @@ function bindMessageActions() {
     const body = prompt("Edit message", message?.body || "");
     if (body !== null) {
       await api(`/api/chat/messages/${button.dataset.edit}`, { method: "PATCH", body: JSON.stringify({ body }) });
-      await loadMessages();
     }
   }));
   $$("[data-delete]").forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     if (confirm("Delete this message?")) {
       await api(`/api/chat/messages/${button.dataset.delete}`, { method: "DELETE" });
-      await loadMessages();
     }
   }));
   $$("[data-pin]").forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     await api(`/api/chat/messages/${button.dataset.pin}/pin`, { method: "POST" });
-    await loadMessages();
   }));
   $$("[data-report-message]").forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
@@ -811,7 +873,7 @@ function quoteMessage(messageId) {
   closeMessageMenus();
   const message = state.messages.find((item) => Number(item.id) === Number(messageId));
   if (!message) return;
-  if (isIntruderMessage(message, { username: message.username, rank: message.rank_name })) return;
+  if (isProtectedSystemMessage(message, { username: message.username, rank: message.rank_name })) return;
   const body = String(message.body || "").trim();
   const quote = body ? `> ${message.username || "User"}: ${body}\n` : `> ${message.username || "User"} shared an attachment\n`;
   const input = $("#messageInput");
@@ -852,7 +914,7 @@ function renderUserRows(list, offline = false) {
   return list.map((user) => `
     <button class="user-row" data-user-id="${user.id}" type="button">
       <span class="status ${offline ? "offline" : ""}"></span>
-      <img class="avatar" src="${html(avatar(user))}" alt="" />
+      ${framedAvatar(user)}
       <span><strong>${html(user.username)}</strong><small>${userRankBadge(user)}</small></span>
     </button>
   `).join("") || '<p class="muted compact-empty">No users here.</p>';
@@ -861,7 +923,7 @@ function renderUserRows(list, offline = false) {
 function renderProfiles() {
   $("#profileGrid").innerHTML = state.users.filter(visibleInUserList).map((user) => `
     <article class="profile-card">
-      <img src="${html(avatar(user))}" alt="" />
+      ${framedAvatar(user, "profile-card-avatar")}
       <h3>${html(user.username)}</h3>
       ${userRankBadge(user)}
       <p class="muted">Level ${levelInfo(user.xp).level} | ${user.profileLikes || 0} likes</p>
@@ -882,7 +944,7 @@ function renderVip() {
     <article class="vip-card svip-plan-card">
       <span class="svip-shine">S-VIP</span>
       <h3>${title}</h3>
-      <p>Unlock gradient style, profile music, GIF banner access, and S-VIP presence.</p>
+      <p>Unlock gradient style, GIF banner access, and S-VIP presence.</p>
       <div class="plan-price"><strong>${diamonds}</strong><span>${gold}</span></div>
       <button class="primary" data-buy-svip="${code}" type="button">Buy ${title}</button>
     </article>
@@ -895,6 +957,142 @@ function renderVip() {
   }));
 }
 
+async function renderChatStore({ force = false } = {}) {
+  const root = $("#chatStore");
+  if (!root) return;
+  if (!force && state.storeCache) return paintChatStore(state.storeCache);
+  root.innerHTML = '<div class="store-loading">Opening store...</div>';
+  const data = await api("/api/social/store");
+  state.storeCache = data;
+  paintChatStore(data);
+}
+
+function storePrice(data, currency, amount) {
+  if (data.free) return '<span class="store-price free">Free</span>';
+  const icon = currency === "gold" ? "/assets/currency-gold.png" : "/assets/currency-diamond.png";
+  return `<span class="store-price"><img src="${icon}" alt="" />${compactNumber(amount)} ${currency}</span>`;
+}
+
+function paintChatStore(data) {
+  const root = $("#chatStore");
+  if (!root) return;
+  const frames = [
+    ["cosmic", "Cosmic Halo", "Violet starlight and cyan moon shards"],
+    ["solar", "Solar Crown", "Antique gold with warm amber crystal"],
+    ["prism", "Cyber Prism", "Gunmetal with cyan-magenta facets"],
+    ["gothic", "Gothic Night", "Obsidian cathedral lines and crimson gems"],
+    ["angelic", "Angelic Calm", "Pearl white feathers and pale blue light"],
+    ["classic-gold", "Classic Gold", "Champagne gold, black enamel and diamonds"],
+  ];
+  root.innerHTML = `
+    <div class="store-wallet-row">
+      <span><img src="/assets/currency-gold.png" alt="Gold" /><strong>${compactNumber(data.gold)}</strong><small>Gold</small></span>
+      <span><img src="/assets/currency-diamond.png" alt="Diamonds" /><strong>${compactNumber(data.diamonds)}</strong><small>Diamonds</small></span>
+    </div>
+    <div class="store-grid">
+      <article class="store-item-card music-store-card">
+        <div class="store-item-art music-art"><span>♪</span></div>
+        <div class="store-item-copy">
+          <div><span class="eyebrow">Profile upgrade</span><h3>Profile Music</h3></div>
+          <p>Upload one MP3 under 10 MB. It is fetched only when someone opens your profile.</p>
+          ${storePrice(data, "gold", 2000)}
+          <button class="primary" data-store-music type="button">${data.owned.profileMusic ? (state.me.profileMusicUrl ? "Change MP3" : "Upload MP3") : "Unlock Profile Music"}</button>
+          <input class="hidden" id="profileMusicUpload" type="file" accept=".mp3,audio/mpeg" />
+        </div>
+      </article>
+      <article class="store-item-card frame-store-card">
+        <div class="store-item-copy">
+          <div><span class="eyebrow">Avatar upgrade</span><h3>Profile Frame Collection</h3></div>
+          <p>Unlock all six frames, then switch between them whenever you want.</p>
+          ${storePrice(data, "diamonds", 100)}
+        </div>
+        ${data.owned.profileFrames && state.framePickerOpen ? `
+          <div class="store-frame-grid">
+            ${frames.map(([code, title, description]) => `
+              <button class="store-frame-choice ${data.selectedFrame === code ? "active" : ""}" data-select-store-frame="${code}" type="button">
+                <span class="store-frame-preview" style="--store-frame:url('${profileFrameAssets[code]}')"><img src="${html(avatar(state.me))}" alt="" /></span>
+                <strong>${title}</strong><small>${description}</small>
+              </button>
+            `).join("")}
+          </div>
+        ` : data.owned.profileFrames
+          ? '<button class="primary store-unlock-button" data-proceed-frames type="button">Proceed</button>'
+          : '<button class="primary store-unlock-button" data-unlock-frames type="button">Unlock All Frames</button>'}
+      </article>
+    </div>
+  `;
+  $("[data-store-music]", root)?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      if (!state.storeCache.owned.profileMusic) {
+        const purchase = await api("/api/social/store/purchase", { method: "POST", body: JSON.stringify({ itemCode: "profile-music" }) });
+        state.storeCache.owned.profileMusic = true;
+        if (!purchase.free) state.storeCache[purchase.currency] = Math.max(0, Number(state.storeCache[purchase.currency]) - Number(purchase.charged));
+        paintChatStore(state.storeCache);
+      }
+      $("#profileMusicUpload")?.click();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  });
+  $("#profileMusicUpload", root)?.addEventListener("change", async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    if (!/\.mp3$/i.test(file.name) || !["audio/mpeg", "audio/mp3", ""].includes(file.type)) return toast("Choose an MP3 file.");
+    if (file.size > 10 * 1024 * 1024) return toast("MP3 must be under 10 MB.");
+    const form = new FormData();
+    form.append("music", file);
+    try {
+      const result = await api("/api/social/store/profile-music", { method: "POST", body: form });
+      state.me.profileMusicUrl = result.profileMusicUrl;
+      state.profileCache.delete(Number(state.me.id));
+      toast("Profile music uploaded.");
+      paintChatStore(state.storeCache);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  $("[data-unlock-frames]", root)?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      const purchase = await api("/api/social/store/purchase", { method: "POST", body: JSON.stringify({ itemCode: "profile-frames" }) });
+      state.storeCache.owned.profileFrames = true;
+      state.framePickerOpen = false;
+      if (!purchase.free) state.storeCache[purchase.currency] = Math.max(0, Number(state.storeCache[purchase.currency]) - Number(purchase.charged));
+      paintChatStore(state.storeCache);
+    } catch (error) {
+      toast(error.message);
+      event.currentTarget.disabled = false;
+    }
+  });
+  $("[data-proceed-frames]", root)?.addEventListener("click", () => {
+    state.framePickerOpen = true;
+    paintChatStore(state.storeCache);
+  });
+  $$("[data-select-store-frame]", root).forEach((button) => button.addEventListener("click", async () => {
+    const frame = button.dataset.selectStoreFrame;
+    try {
+      await api("/api/social/store/frame", { method: "POST", body: JSON.stringify({ frame }) });
+      state.storeCache.selectedFrame = frame;
+      state.framePickerOpen = false;
+      state.me.frame = frame;
+      const meInList = state.users.find((user) => Number(user.id) === Number(state.me.id));
+      if (meInList) meInList.frame = frame;
+      state.profileCache.delete(Number(state.me.id));
+      renderUsers();
+      renderProfiles();
+      renderMessages();
+      paintChatStore(state.storeCache);
+      toast("Profile frame selected.");
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+}
+
 async function renderNews({ force = false } = {}) {
   if ($("#newsView").classList.contains("active")) clearNewsUnread();
   syncNewsComposerAccess();
@@ -902,7 +1100,8 @@ async function renderNews({ force = false } = {}) {
     paintNews(state.newsCache);
     return;
   }
-  const posts = await api("/api/social/news");
+  $("#newsList").innerHTML = '<div class="view-loading"><span></span><strong>Loading news...</strong></div>';
+  const posts = await api("/api/social/news", force ? { cache: "no-store" } : {});
   state.newsCache = posts;
   state.newsCacheAt = Date.now();
   paintNews(posts);
@@ -1032,9 +1231,10 @@ function openNewsComposer() {
 
 async function renderLeaderboard({ force = false } = {}) {
   const cached = state.leaderboardCache[state.leaderboardTab];
+  if (!cached || force) $("#leaderboard").innerHTML = '<div class="view-loading"><span></span><strong>Loading leaderboard...</strong></div>';
   const data = !force && cached && Date.now() - cached.at < 30000
     ? cached.data
-    : await api(`/api/social/leaderboards?board=${encodeURIComponent(state.leaderboardTab)}`);
+    : await api(`/api/social/leaderboards?board=${encodeURIComponent(state.leaderboardTab)}`, force ? { cache: "no-store" } : {});
   state.leaderboardCache[state.leaderboardTab] = { data, at: Date.now() };
   const labels = { xp: "Top XP", gold: "Top Gold", diamonds: "Top Diamonds", shooters: "Top Shooters" };
   const rows = data.rows || data[state.leaderboardTab] || [];
@@ -1074,6 +1274,7 @@ async function loadFriends() {
   state.friends = data.friends || [];
   state.friendRequests = data.requests || state.friendRequests;
   state.blocks = data.blocks || [];
+  state.friendsCacheAt = Date.now();
   renderFriends();
   setBadges();
 }
@@ -1091,6 +1292,7 @@ async function refreshUsersLight() {
   if (state.me) state.me.chatBackground = normalizeRoomBackground(state.me.chatBackground);
   state.users = data.users || state.users;
   state.permissions = data.permissions || state.permissions || {};
+  state.usersCacheAt = Date.now();
   syncNewsComposerAccess();
   renderUsers();
   renderProfiles();
@@ -1099,9 +1301,10 @@ async function refreshUsersLight() {
 
 function scheduleUsersRefresh() {
   clearTimeout(state.usersRefreshTimer);
+  const waitFor = Math.max(1200, 10000 - (Date.now() - Number(state.usersCacheAt || 0)));
   state.usersRefreshTimer = setTimeout(() => {
     refreshUsersLight().catch(() => {});
-  }, 350);
+  }, waitFor);
 }
 
 function renderFriends() {
@@ -1171,10 +1374,38 @@ async function openProfile(userId) {
     $("#app")?.classList.add("right-closed");
     $("#app")?.classList.remove("nav-open");
   }
-  const data = await api(`/api/social/profiles/${userId}`);
+  const previewUser = userById(userId) || (Number(userId) === Number(state.me?.id) ? state.me : null);
+  if (isSystemBot(previewUser)) return;
+  closeProfileActionsOverlay();
+  const requestId = ++state.profileRequestId;
+  if (previewUser) {
+    $("#profileName").textContent = displayName(previewUser);
+    $("#profileHandle").textContent = `@${String(previewUser.username || "user").toLowerCase()}`;
+    $("#profileAvatar").src = avatar(previewUser);
+  }
+  const previewFrame = profileFrame(previewUser);
+  $("#profileFrameOverlay").classList.toggle("active", Boolean(previewFrame));
+  $("#profileFrameOverlay").style.backgroundImage = previewFrame ? `url('${profileFrameAssets[previewFrame]}')` : "";
+  $("#profileInfo").innerHTML = '<div class="profile-loading-card"><span></span><strong>Loading profile...</strong></div>';
+  $("#profileMore").innerHTML = "";
+  $("#profileCounters").innerHTML = "";
+  $("#profileCornerActions").innerHTML = '<button data-close-profile title="Close" type="button">x</button>';
+  $("#profileMainActions").innerHTML = "";
+  $("[data-close-profile]")?.addEventListener("click", () => $("#profileModal").close());
+  if (!$("#profileModal").open) $("#profileModal").showModal();
+  const cached = state.profileCache.get(Number(userId));
+  let data;
+  try {
+    data = cached && Date.now() - cached.at < 20000 ? cached.data : await api(`/api/social/profiles/${userId}`);
+  } catch (error) {
+    if (requestId === state.profileRequestId) $("#profileInfo").innerHTML = `<p class="muted">${html(error.message)}</p>`;
+    toast(error.message);
+    return false;
+  }
+  if (requestId !== state.profileRequestId) return;
+  state.profileCache.set(Number(userId), { data, at: Date.now() });
   const user = data.user;
   if (isSystemBot(user)) return;
-  closeProfileActionsOverlay();
   const self = Number(user.id) === Number(state.me.id);
   const info = levelInfo(user.xp);
   const badgeCount = data.badges.length + (data.gifts || []).length;
@@ -1185,6 +1416,9 @@ async function openProfile(userId) {
   $("#profileAvatar").src = profileAvatarSrc;
   $("#profileAvatar").dataset.zoomSrc = profileAvatarSrc;
   $("#profileAvatar").classList.add("zoomable-image");
+  const selectedFrame = profileFrame(user);
+  $("#profileFrameOverlay").classList.toggle("active", Boolean(selectedFrame));
+  $("#profileFrameOverlay").style.backgroundImage = selectedFrame ? `url('${profileFrameAssets[selectedFrame]}')` : "";
   $("#profileStatusDot").classList.toggle("offline", !user.online);
   $("#profileName").textContent = displayName(user);
   $("#profileHandle").textContent = `@${user.username.toLowerCase()}`;
@@ -1214,7 +1448,7 @@ async function openProfile(userId) {
         <article><span>Badges</span><strong>${badgeCount}</strong></article>
       </div>
     </div>
-    ${user.profileMusicUrl ? `<div class="profile-music"><span>Profile music</span><audio controls src="${html(user.profileMusicUrl)}"></audio></div>` : ""}
+    ${user.profileMusicUrl ? `<div class="profile-music"><span>Profile music</span><audio id="activeProfileMusic" controls autoplay preload="none" src="${html(user.profileMusicUrl)}"></audio></div>` : ""}
   `;
   $("#profileFriends").innerHTML = "";
   $("#profileBadges").innerHTML = "";
@@ -1226,6 +1460,7 @@ async function openProfile(userId) {
   $$("[data-close-profile]").forEach((button) => button.addEventListener("click", () => $("#profileModal").close()));
   $$("[data-toggle-profile-like]").forEach((button) => button.addEventListener("click", async () => {
     const result = await api(`/api/social/profiles/${button.dataset.toggleProfileLike}/like`, { method: "POST" });
+    state.profileCache.delete(Number(user.id));
     toast(result.liked ? "Profile liked." : "Profile unliked.");
     await openProfile(user.id);
   }));
@@ -1235,7 +1470,8 @@ async function openProfile(userId) {
   }));
   bindProfileSocialActions(user.id);
   bindUserActionButtons(user.id);
-  if (!$("#profileModal").open) $("#profileModal").showModal();
+  $("#activeProfileMusic")?.play().catch(() => {});
+  return true;
 }
 
 function compactNumber(value) {
@@ -1550,8 +1786,7 @@ function openUserActions(userId) {
   `;
   bindUserActionButtons(user.id);
   $("[data-user-action-panel]")?.addEventListener("click", async () => {
-    await openProfile(user.id);
-    openProfileActionsDrawer(user.id, user);
+    if (await openProfile(user.id)) openProfileActionsDrawer(user.id, user);
   });
   showDrawer();
 }
@@ -1857,7 +2092,6 @@ function openProfileEditor(section = "edit") {
     form.bio.value = state.me.bio || "";
     form.aboutMe.value = state.me.aboutMe || "";
     form.mood.value = state.me.mood || "";
-    form.profileMusicUrl.value = state.me.profileMusicUrl || "";
     form.profileTitle.value = state.me.profileTitle || "";
     form.level.value = levelInfo(state.me.xp).level;
     form.profileStatus.value = state.me.profileStatus || "Online";
@@ -2511,6 +2745,10 @@ const realtimeHandlers = {
   message(message) {
     if (Number(message.room_id) !== Number(state.currentRoomId)) return;
     if (state.messages.some((item) => Number(item.id) === Number(message.id))) return;
+    if (Number(message.user_id) === Number(state.me.id)) {
+      const pending = state.messages.find((item) => item.pending && item.body === message.body);
+      if (pending) state.messages = state.messages.filter((item) => item !== pending);
+    }
     state.messages.push(message);
     if (state.messages.length > 60) state.messages = state.messages.slice(-60);
     renderMessages();
@@ -2570,9 +2808,9 @@ const realtimeHandlers = {
       setTimeout(() => location.reload(), 900);
     }
   },
-  "users-changed"() {
+  "users-changed"(data = {}) {
+    if (data.userId) state.profileCache.delete(Number(data.userId));
     scheduleUsersRefresh();
-    if ($("#leaderboardView").classList.contains("active")) renderLeaderboard({ force: true }).catch((error) => toast(error.message));
     setBadges();
   },
   "intruder-score-updated"() {
@@ -2600,10 +2838,10 @@ const realtimeHandlers = {
     }
   },
   reaction() {
-    loadMessages().catch(() => {});
+    scheduleMessagesRefresh();
   },
   "message-pinned"() {
-    loadMessages().catch(() => {});
+    scheduleMessagesRefresh();
   },
   "rooms-changed"() {
     bootstrap().catch((error) => toast(error.message));
@@ -2637,7 +2875,7 @@ function connectEventSourceFallback() {
     setTimeout(() => {
       if (state.token && !state.socket && !state.eventSource) connectEvents();
     }, 1500);
-    if (!document.hidden) refreshVisibleData({ force: true }).catch(() => {});
+    if (!document.hidden && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
   };
 }
 
@@ -2657,10 +2895,10 @@ function connectEvents() {
       state.socket.on(eventName, handler);
     });
     state.socket.on("connect", () => {
-      if (state.me && Date.now() - state.lastSyncAt > 5000) refreshVisibleData({ force: true }).catch(() => {});
+      if (state.me && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
     });
     state.socket.on("reconnect", () => {
-      refreshVisibleData({ force: true }).catch(() => {});
+      refreshVisibleData().catch(() => {});
     });
     state.socket.on("connect_error", (error) => {
       console.warn("Socket connection failed; using fallback event stream.", error.message);
@@ -2685,10 +2923,10 @@ async function refreshVisibleData({ force = false } = {}) {
   state.lastSyncAt = Date.now();
   try {
     const results = await Promise.allSettled([
-      refreshUsersLight(),
+      force || Date.now() - Number(state.usersCacheAt || 0) > 30000 ? refreshUsersLight() : Promise.resolve(),
       loadMessages(),
       refreshPmUnread(),
-      loadFriends(),
+      force || Date.now() - Number(state.friendsCacheAt || 0) > 60000 ? loadFriends() : Promise.resolve(),
       $("#newsView").classList.contains("active") ? renderNews({ force }) : Promise.resolve(),
       $("#leaderboardView").classList.contains("active") ? renderLeaderboard({ force }) : Promise.resolve(),
       $("#adminView").classList.contains("active") ? renderAdmin() : Promise.resolve(),
@@ -2723,8 +2961,7 @@ function handleReturnToPage() {
     state.hiddenAt = Date.now();
     return;
   }
-  const wasAwayFor = Date.now() - Number(state.hiddenAt || state.lastSyncAt || 0);
-  refreshVisibleData({ force: wasAwayFor > 15000 }).catch(() => {});
+  refreshVisibleData().catch(() => {});
 }
 
 function handleAuthFailure(_error) {
@@ -2901,6 +3138,10 @@ function bindEvents() {
     const sendKey = `${state.currentRoomId}|${state.replyToId || ""}|${body}|${state.uploadFile?.name || ""}|${state.uploadFile?.size || 0}`;
     if (sendKey === state.lastSentKey && Date.now() - state.lastSentAt < 2000) return;
     const submitButton = $("#messageForm button[type='submit']");
+    const roomId = state.currentRoomId;
+    const replyToId = state.replyToId;
+    const optimistic = Boolean(body && !state.uploadFile && body.toLowerCase() !== "/clear");
+    const pendingId = `pending-${Date.now()}`;
     state.sendingMessage = true;
     submitButton.disabled = true;
     try {
@@ -2913,11 +3154,50 @@ function bindEvents() {
       }
       const form = new FormData();
       form.append("body", body);
-      if (state.replyToId) form.append("replyToId", state.replyToId);
+      if (replyToId) form.append("replyToId", replyToId);
       if (state.uploadFile) form.append("attachment", state.uploadFile);
-      await api(`/api/chat/rooms/${state.currentRoomId}/messages`, { method: "POST", body: form });
-      $("#messageInput").value = "";
-      $("#charCount").textContent = "0/1200";
+      if (optimistic) {
+        state.messages.push({
+          id: pendingId,
+          room_id: roomId,
+          user_id: state.me.id,
+          username: state.me.username,
+          rank_name: state.me.rank,
+          profile_title: state.me.profileTitle,
+          avatar_url: avatar(state.me),
+          username_color: state.me.usernameColor,
+          text_color: state.me.textColor,
+          bubble_style: state.me.bubbleStyle,
+          frame: state.me.frame,
+          body,
+          reply_to_id: replyToId,
+          created_at: new Date().toISOString(),
+          pending: true,
+        });
+        $("#messageInput").value = "";
+        $("#charCount").textContent = "0/1200";
+        renderMessages();
+      }
+      const sent = await api(`/api/chat/rooms/${roomId}/messages`, { method: "POST", body: form });
+      if (Number(state.currentRoomId) === Number(roomId)) {
+        state.messages = state.messages.filter((message) => message.id !== pendingId && (!sent.id || Number(message.id) !== Number(sent.id)));
+        if (!sent.private) state.messages.push(sent);
+        renderMessages();
+      }
+      if (!sent.private && String(sent.body || "").startsWith(betPrefix)) {
+        try {
+          const bet = JSON.parse(sent.body.slice(betPrefix.length));
+          if (Number.isFinite(Number(bet.balance))) {
+            state.me.gold = Number(bet.balance);
+            if (state.storeCache) state.storeCache.gold = Number(bet.balance);
+          }
+        } catch (_error) {}
+      }
+      if (sent.private && sent.message) toast(sent.message);
+      if (!optimistic) {
+        $("#messageInput").value = "";
+        $("#charCount").textContent = "0/1200";
+      }
       state.replyToId = null;
       state.uploadFile = null;
       $("#replyBox").classList.add("hidden");
@@ -2927,6 +3207,12 @@ function bindEvents() {
       state.lastSentKey = sendKey;
       state.lastSentAt = Date.now();
     } catch (error) {
+      if (optimistic) {
+        state.messages = state.messages.filter((message) => message.id !== pendingId);
+        if (!$("#messageInput").value) $("#messageInput").value = body;
+        $("#charCount").textContent = `${$("#messageInput").value.length}/1200`;
+        renderMessages();
+      }
       toast(error.message);
     } finally {
       state.sendingMessage = false;
