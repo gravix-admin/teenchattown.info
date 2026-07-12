@@ -85,6 +85,8 @@
           <button data-view="leaderboard" type="button">Leaderboard</button>
           <button data-view="tournament" type="button">Tournament</button>
           <button data-view="chatStore" type="button">Chat Store</button>
+          <button data-view="rules" type="button">Rules</button>
+          <button data-view="commands" type="button">Commands</button>
           <button data-view="vip" type="button">Buy S-VIP</button>
         </nav>
       </aside>
@@ -129,7 +131,20 @@
         <section class="view" id="newsView"><div class="panel news-panel"><div class="view-head"><h2>Town News <span id="newsTitleDot" class="inline-news-dot hidden" aria-hidden="true"></span></h2><div class="view-head-actions"><button id="newsComposeButton" class="news-add-button hidden" title="Post news" aria-label="Post news" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button data-close-view type="button">Close</button></div></div><div id="newsComposerArea" class="news-compose-area hidden"></div><div id="newsList"></div></div></section>
         <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
         <section class="view" id="tournamentView"><div class="panel"><div class="view-head"><h2>Tournament</h2><button data-close-view type="button">Close</button></div><div class="empty-state"><strong>Tournament hub</strong><p class="muted">Tournament details will be added here later.</p></div></div></section>
-        <section class="view" id="chatStoreView"><div class="panel"><div class="view-head"><h2>Chat Store</h2><button data-close-view type="button">Close</button></div><div class="empty-state"><strong>Chat Store</strong><p class="muted">Store items will be added here later.</p></div></div></section>
+        <section class="view" id="chatStoreView"><div class="panel store-panel"><div class="view-head"><div><h2>Chat Store</h2><small class="store-free-note">Free for Premium</small></div><button data-close-view type="button">Close</button></div><div id="chatStore"><div class="store-loading">Opening store...</div></div></div></section>
+        <section class="view" id="rulesView"><div class="panel policy-panel"><div class="view-head"><h2>TeenChatTown Chat Rules</h2><button data-close-view type="button">Close</button></div><p class="policy-intro">TeenChatTown is a community for respectful, safe, and enjoyable conversations. By using the platform, you agree to follow these rules.</p><div class="rules-list">
+          <article><span>1</span><div><h3>Respect Everyone</h3><p>Treat all users with respect. Harassment, bullying, personal attacks, threats, discrimination, or hate speech are not allowed.</p></div></article>
+          <article><span>2</span><div><h3>Keep the Chat Appropriate</h3><p>Do not post sexual, graphic, violent, or disturbing content. Any sexual content involving minors will result in an immediate permanent ban and may be reported.</p></div></article>
+          <article><span>3</span><div><h3>Protect Personal Information</h3><p>Do not share your address, phone number, passwords, financial information, private photographs, or other sensitive details. Do not expose another user’s private information without permission.</p></div></article>
+          <article><span>4</span><div><h3>No Predatory or Suspicious Behaviour</h3><p>Grooming, sexual requests, manipulation, stalking, blackmail, or attempts to exploit another user are strictly prohibited. Report suspicious behaviour immediately.</p></div></article>
+          <article><span>5</span><div><h3>No Spam or Disruption</h3><p>Do not flood the chat, repeatedly send the same message, abuse capital letters, post excessive links, advertise without permission, or deliberately disturb conversations.</p></div></article>
+          <article><span>6</span><div><h3>No Impersonation</h3><p>Do not pretend to be another user, staff member, celebrity, organisation, or official representative. Misleading usernames and profiles may be removed.</p></div></article>
+          <article><span>7</span><div><h3>Follow Staff Instructions</h3><p>Moderators and administrators may warn, mute, kick, restrict, or ban users who violate the rules. Do not argue about moderation actions in public rooms. Use the official support or appeal system instead.</p></div></article>
+          <article><span>8</span><div><h3>Do Not Evade Punishments</h3><p>Creating alternate accounts or using technical methods to bypass a mute, ban, restriction, or account suspension is prohibited and may result in a permanent ban.</p></div></article>
+          <article><span>9</span><div><h3>Report Problems Responsibly</h3><p>Use the report feature for rule violations, harmful content, suspicious users, or security issues. False reports and misuse of the reporting system may lead to action against your account.</p></div></article>
+          <article><span>10</span><div><h3>Community Safety</h3><p>Any behaviour that harms users, disrupts the community, or misuses the platform may result in moderation action, even if it is not specifically listed above.</p></div></article>
+        </div><section class="enforcement-card"><h3>Enforcement</h3><p>Rule violations may result in a warning, message removal, mute, kick, temporary suspension, account restriction, or permanent ban depending on severity and previous behaviour.</p><p>Serious safety concerns may be reported to the appropriate authorities.</p><strong>By continuing to use TeenChatTown, you confirm that you understand and agree to follow these rules.</strong></section></div></section>
+        <section class="view" id="commandsView"><div class="panel policy-panel"><div class="view-head"><h2>Commands</h2><button data-close-view type="button">Close</button></div><div class="command-directory"><article><span>1</span><div><h3><code>/bet</code></h3><p>Use: <code>/bet "gold amount"</code></p><small>Wait 3 minutes before using the bet command again.</small></div></article></div></div></section>
         <section class="view" id="vipView"><div class="panel"><div class="view-head"><h2>Buy S-VIP</h2><button data-close-view type="button">Close</button></div><div class="vip-grid" id="vipGrid"></div></div></section>
         <section class="view" id="adminView"><div class="admin-dashboard" id="adminDashboard"></div></section>
       </main>
@@ -157,6 +172,7 @@
           <div class="profile-corner-actions" id="profileCornerActions"></div>
           <div class="profile-avatar-wrap">
             <img id="profileAvatar" alt="" />
+            <span class="profile-frame-overlay" id="profileFrameOverlay" aria-hidden="true"></span>
             <span class="profile-status-dot" id="profileStatusDot"></span>
           </div>
           <h2 id="profileName"></h2>
@@ -219,7 +235,6 @@
           <label>About Me<textarea name="aboutMe" placeholder="About me"></textarea></label>
           <div class="edit-field-grid">
             <label>Mood<input name="mood" placeholder="Mood" /></label>
-            <label>Profile music URL<input name="profileMusicUrl" placeholder="https://..." /></label>
           </div>
           <div class="edit-field-grid">
             <label>Username color<input name="usernameColor" placeholder="#f87171" /></label>
