@@ -10,6 +10,7 @@ const database = require("./database");
 const { attachUser } = require("./middleware/auth");
 const { setSocketServer, broadcast } = require("./services/events");
 const { startIntruderLoop } = require("./services/intruderService");
+const { startDataRetention } = require("./services/dataRetention");
 
 const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chat");
@@ -108,6 +109,7 @@ async function keepSchemaReady() {
       await initSchema();
       console.log("Database schema ready.");
       startIntruderLoop();
+      startDataRetention();
       return;
     } catch (error) {
       console.error("Database schema check failed; retrying shortly.");
