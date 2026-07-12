@@ -193,14 +193,22 @@
             <label class="edit-upload-pill small">Change Avatar<input id="avatarUpload" type="file" accept="image/*" /></label>
           </div>
         </div>
-        <label>Display Name<input name="displayName" placeholder="Display name" /></label>
-        <label>Username<input name="username" placeholder="Username, VIP or higher" /></label>
-        <label>Bio<span class="bio-count" id="bioCount">0/120</span><textarea name="bio" placeholder="Short bio" maxlength="120"></textarea></label>
-        <div class="edit-field-grid">
-          <label>Role / Title<input name="profileTitle" placeholder="HACKER" /></label>
-          <label>Level<input name="level" readonly /></label>
-          <label>Status<select name="profileStatus"><option>Online</option><option>Invisible</option></select></label>
-        </div>
+        <section class="edit-profile-card edit-identity-card">
+          <div class="edit-section-heading"><strong>Profile identity</strong><small>How people see you around town</small></div>
+          <div class="edit-name-grid">
+            <label><span>Display name</span><input name="displayName" placeholder="Name shown in chat" /></label>
+            <label><span>Username</span><input name="username" placeholder="Your unique @username" /><small>Username changes require VIP or higher.</small></label>
+          </div>
+          <label><span>Bio</span><span class="bio-count" id="bioCount">0/120</span><textarea name="bio" placeholder="Say something short about yourself" maxlength="120"></textarea></label>
+        </section>
+        <section class="edit-profile-card edit-access-card">
+          <div class="edit-section-heading"><strong>Account details</strong><small>Permission-based options appear automatically</small></div>
+          <div class="edit-field-grid compact-fields">
+            <label data-title-field><span>Role / title</span><input name="profileTitle" placeholder="Custom title" /></label>
+            <label><span>Level</span><input name="level" readonly /></label>
+            <label data-status-field><span>Status</span><select name="profileStatus"><option>Online</option><option>Invisible</option></select></label>
+          </div>
+        </section>
         <section class="profile-settings-card">
           <button class="settings-collapse" type="button"><strong>Profile Settings</strong><span>^</span></button>
           <label>Theme Accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" type="button"></button><button data-accent="#a855f7" type="button"></button><button data-accent="#0ea5e9" type="button"></button><button data-accent="#22c55e" type="button"></button><button data-accent="#f97316" type="button"></button></span></label>
@@ -235,10 +243,10 @@
       <div id="userActionBody"></div>
     </dialog>
 
-    <div class="image-lightbox hidden" id="imageLightbox" role="dialog" aria-modal="true" aria-hidden="true">
+    <dialog class="image-lightbox" id="imageLightbox" aria-label="Image preview">
       <button class="image-lightbox-close" data-close-lightbox type="button">x</button>
       <img id="imageLightboxImage" alt="" />
-    </div>
+    </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/script.js"></script>
