@@ -6,6 +6,7 @@ const { requireAuth } = require("../middleware/auth");
 const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { calculateAge, publicUser, rankBadges } = require("../services/userService");
 const { broadcast } = require("../services/events");
+const { clientIp, countryFromHeaders, refreshUserLocation } = require("../services/geoLocation");
 const {
   normalizeUsername,
   normalizeEmail,
@@ -19,7 +20,10 @@ const {
 const router = express.Router();
 const avatarUpload = imageUpload("avatars");
 const bannerUpload = imageUpload("banners");
-const exposedTools = ["postNews", "warn", "mute", "kick", "ban", "deleteAccount", "changeRank", "editProfile", "intruderTool", "profileEditTool"];
+const exposedTools = ["postNews", "warn", "mute", "kick", "ban", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "intruderTool", "profileEditTool"];
+const userDirectoryColumns = `id, username, display_name, age, gender, rank_name, avatar_url,
+  profile_title, profile_status, show_online_status, mood, xp, gold, diamonds, country,
+  frame, last_seen, created_at`;
 
 function sign(user) {
   return jwt.sign({ id: user.id, v: Number(user.token_version || 0) }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -52,8 +56,8 @@ router.post("/register", async (req, res) => {
   if (conflict.username) return res.status(409).json({ error: "This username is already taken." });
   if (conflict.email) return res.status(409).json({ error: "This email is already taken." });
   const passwordHash = await bcrypt.hash(password, 10);
-  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
-  const country = req.headers["cf-ipcountry"] || "Auto detected on live host";
+  const ip = clientIp(req);
+  const country = countryFromHeaders(req);
   let result;
   try {
     [result] = await pool.query(
@@ -65,6 +69,7 @@ router.post("/register", async (req, res) => {
     if (isDuplicateKeyError(error)) return res.status(409).json({ error: duplicateKeyMessage(error) });
     throw error;
   }
+  refreshUserLocation(result.insertId, req).catch((error) => console.warn("Country detection failed:", error.message));
   const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [result.insertId]);
   res.status(201).json({ token: sign(rows[0]) });
 });
@@ -79,6 +84,7 @@ router.post("/login", async (req, res) => {
   if (user.banned_until && new Date(user.banned_until) > new Date()) return res.status(403).json({ error: "This account is banned." });
   if (user.kicked_until && new Date(user.kicked_until) > new Date()) return res.status(403).json({ error: "You were temporarily kicked. Please try again later." });
   await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [user.id]);
+  refreshUserLocation(user.id, req).catch((error) => console.warn("Country detection failed:", error.message));
   res.json({ token: sign(user) });
 });
 
@@ -104,7 +110,7 @@ router.get("/me", requireAuth, async (req, res) => {
     "SELECT id, name, description, image_url, is_pinned, created_by, created_at, IF(password_hash IS NULL OR password_hash = '', 0, 1) AS locked FROM rooms ORDER BY CASE WHEN name = 'Main Room' THEN 0 ELSE 1 END, is_pinned DESC, name"
   );
   const [users] = await pool.query(
-    `SELECT * FROM users
+    `SELECT ${userDirectoryColumns} FROM users
      WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
      ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','queen','king','s-vip','vip','user'), username`
   );
@@ -134,7 +140,7 @@ router.get("/me", requireAuth, async (req, res) => {
 
 router.get("/users", requireAuth, async (req, res) => {
   const [users] = await pool.query(
-    `SELECT * FROM users
+    `SELECT ${userDirectoryColumns} FROM users
      WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
      ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','queen','king','s-vip','vip','user'), username`
   );
