@@ -170,6 +170,7 @@ async function initSchema() {
       delete_requested_at DATETIME NULL,
       last_seen DATETIME NULL,
       last_online_reward_at DATETIME NULL,
+      last_bet_at DATETIME NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -343,6 +344,16 @@ async function initSchema() {
       amount INT NOT NULL,
       note VARCHAR(160) DEFAULT '',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_store_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      item_code VARCHAR(60) NOT NULL,
+      purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY one_store_item (user_id, item_code)
     )
   `);
 
@@ -524,6 +535,7 @@ async function migrateExistingTables() {
       delete_requested_at: "DATETIME NULL",
       last_seen: "DATETIME NULL",
       last_online_reward_at: "DATETIME NULL",
+      last_bet_at: "DATETIME NULL",
       token_version: "INT DEFAULT 0",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     },
@@ -632,6 +644,11 @@ async function migrateExistingTables() {
       note: "VARCHAR(160) DEFAULT ''",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     },
+    user_store_items: {
+      user_id: "INT NOT NULL DEFAULT 1",
+      item_code: "VARCHAR(60) NOT NULL DEFAULT ''",
+      purchased_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    },
     achievements: {
       code: "VARCHAR(60) NOT NULL DEFAULT ''",
       title: "VARCHAR(100) NOT NULL DEFAULT ''",
@@ -731,6 +748,11 @@ async function migrateExistingTables() {
   await ensureIndex("notifications", "idx_notifications_user_created", "`user_id`, `created_at`");
   await ensureIndex("news_comments", "idx_news_comments_news_created", "`news_id`, `created_at`");
   await ensureIndex("users", "idx_users_rank_username", "`rank_name`, `username`");
+  await ensureIndex("users", "idx_users_xp_board", "`xp`, `username`");
+  await ensureIndex("users", "idx_users_gold_board", "`gold`, `username`");
+  await ensureIndex("users", "idx_users_diamond_board", "`diamonds`, `username`");
+  await ensureIndex("intruder_scores", "idx_intruder_score_board", "`points`, `shots`");
+  await ensureIndex("news_posts", "idx_news_posts_created", "`created_at`");
 
   await relaxLegacyRequiredColumns();
   await migrateLegacyUserData();
