@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const pool = require("../database");
-const { requireAuth, isStaff, rankPower } = require("../middleware/auth");
+const { requireAuth, isStaff, rankPower, cacheUser } = require("../middleware/auth");
 const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { addClient, removeClient, broadcast, notifyUser } = require("../services/events");
 const { INTRUDER_PREFIX, handlePossibleShot } = require("../services/intruderService");
@@ -12,13 +12,18 @@ const router = express.Router();
 const upload = imageUpload("gallery");
 const voiceUpload = imageUpload("voice");
 const roomUpload = imageUpload("rooms");
+const roomCache = new Map();
+const ROOM_CACHE_TTL_MS = 60000;
 
 function muted(user) {
   return user.muted_until && new Date(user.muted_until) > new Date();
 }
 
 async function roomById(roomId) {
+  const cached = roomCache.get(Number(roomId));
+  if (cached && cached.expiresAt > Date.now()) return cached.room;
   const [[room]] = await pool.query("SELECT * FROM rooms WHERE id = ?", [roomId]);
+  if (room) roomCache.set(Number(roomId), { room, expiresAt: Date.now() + ROOM_CACHE_TTL_MS });
   return room || null;
 }
 
@@ -132,21 +137,39 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     "INSERT INTO messages (room_id, user_id, body, attachment_url, attachment_type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
     [req.params.roomId, req.user.id, body, attachmentUrl, req.file?.mimetype || null, req.body.replyToId || null]
   );
-  const [rows] = await pool.query(
-    `SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame
-     FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?`,
-    [result.insertId]
-  );
-  broadcast("message", rows[0]);
-  res.status(201).json(rows[0]);
+  const message = {
+    id: result.insertId,
+    room_id: Number(req.params.roomId),
+    user_id: req.user.id,
+    body,
+    attachment_url: attachmentUrl,
+    attachment_type: req.file?.mimetype || null,
+    reply_to_id: req.body.replyToId || null,
+    is_pinned: 0,
+    created_at: new Date(),
+    username: req.user.username,
+    rank_name: req.user.rank_name,
+    profile_title: req.user.profile_title,
+    avatar_url: req.user.avatar_url,
+    username_color: req.user.username_color,
+    text_color: req.user.text_color,
+    bubble_style: req.user.bubble_style,
+    frame: req.user.frame,
+  };
+  broadcast("message", message);
+  res.status(201).json(message);
   (async () => {
     await pool.query("UPDATE users SET message_count = message_count + 1, xp = xp + IF((message_count + 1) % 2 = 0, 1, 0), gold = gold + IF((message_count + 1) % 10 = 0, 100, 0) WHERE id = ?", [req.user.id]);
+    req.user.message_count = Number(req.user.message_count || 0) + 1;
+    if (req.user.message_count % 2 === 0) req.user.xp = Number(req.user.xp || 0) + 1;
+    if (req.user.message_count % 10 === 0) req.user.gold = Number(req.user.gold || 0) + 100;
+    cacheUser(req.user);
     await Promise.all([
       pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'first_message'", [req.user.id]),
       pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'ten_messages' AND (SELECT message_count FROM users WHERE id = ?) >= 10", [req.user.id, req.user.id]),
     ]);
   })().catch((error) => console.error("[message rewards] update failed:", error.message));
-  handlePossibleShot(rows[0], req.user).catch((error) => {
+  handlePossibleShot(message, req.user).catch((error) => {
     console.error("[intruder] shot handling failed:", error.message);
   });
 });
