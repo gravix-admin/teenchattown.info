@@ -438,6 +438,8 @@ async function initSchema() {
       id TINYINT PRIMARY KEY DEFAULT 1,
       enabled TINYINT DEFAULT 0,
       interval_minutes INT DEFAULT 5,
+      min_interval_minutes INT DEFAULT 2,
+      max_interval_minutes INT DEFAULT 6,
       bot_user_id INT NULL,
       bot_name VARCHAR(80) DEFAULT 'Intruder',
       bot_avatar_url MEDIUMTEXT NULL,
@@ -685,6 +687,17 @@ async function migrateExistingTables() {
       details: "TEXT NULL",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     },
+    intruder_settings: {
+      enabled: "TINYINT DEFAULT 0",
+      interval_minutes: "INT DEFAULT 5",
+      min_interval_minutes: "INT DEFAULT 2",
+      max_interval_minutes: "INT DEFAULT 6",
+      bot_user_id: "INT NULL",
+      bot_name: "VARCHAR(80) DEFAULT 'Intruder'",
+      bot_avatar_url: "MEDIUMTEXT NULL",
+      next_spawn_at: "DATETIME NULL",
+      updated_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    },
   };
 
   for (const [table, columns] of Object.entries(migrations)) {
@@ -711,8 +724,10 @@ async function migrateExistingTables() {
   }
 
   await ensureIndex("messages", "idx_messages_room_deleted_created", "`room_id`, `deleted_at`, `created_at`");
+  await ensureIndex("messages", "idx_messages_retention", "`created_at`, `is_pinned`");
   await ensureIndex("private_messages", "idx_pm_receiver_read_deleted", "`receiver_id`, `read_at`, `deleted_at`");
   await ensureIndex("private_messages", "idx_pm_pair_deleted_created", "`sender_id`, `receiver_id`, `deleted_at`, `created_at`");
+  await ensureIndex("private_messages", "idx_pm_retention", "`created_at`");
   await ensureIndex("notifications", "idx_notifications_user_created", "`user_id`, `created_at`");
   await ensureIndex("news_comments", "idx_news_comments_news_created", "`news_id`, `created_at`");
   await ensureIndex("users", "idx_users_rank_username", "`rank_name`, `username`");
