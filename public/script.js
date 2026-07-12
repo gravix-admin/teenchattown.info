@@ -1,3 +1,15 @@
+function readLocalCache(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_error) { return null; }
+}
+
+function writeLocalCache(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_error) {}
+}
+
+const persistedNews = readLocalCache("tct_news_cache");
+const persistedStore = readLocalCache("tct_store_cache");
+const persistedLeaderboards = readLocalCache("tct_leaderboard_cache");
+
 const state = {
   token: localStorage.getItem("tct_token") || "",
   me: null,
@@ -35,11 +47,12 @@ const state = {
   syncing: false,
   lastSyncAt: 0,
   hiddenAt: 0,
-  newsCache: null,
-  newsCacheAt: 0,
-  leaderboardCache: {},
+  newsCache: persistedNews?.data || null,
+  newsCacheAt: Number(persistedNews?.at || 0),
+  leaderboardCache: persistedLeaderboards || {},
   profileCache: new Map(),
-  storeCache: null,
+  storeCache: persistedStore?.data || null,
+  storeCacheAt: Number(persistedStore?.at || 0),
   framePickerOpen: false,
   usersCacheAt: 0,
   friendsCacheAt: 0,
@@ -47,6 +60,7 @@ const state = {
   socket: null,
   eventSource: null,
   inflightGets: new Map(),
+  userActionsBound: false,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -472,6 +486,10 @@ async function bootstrap() {
     const previousRoomId = Number(state.currentRoomId || localStorage.getItem("tct_current_room_id")) || null;
     const data = await api("/api/auth/me");
     state.me = data.me;
+    if (Number(persistedStore?.userId || 0) !== Number(state.me?.id || 0)) {
+      state.storeCache = null;
+      state.storeCacheAt = 0;
+    }
     if (state.me) {
       state.me.chatBackground = normalizeRoomBackground(state.me.chatBackground || localStorage.getItem("tct_chat_background"));
       localStorage.setItem("tct_chat_background", state.me.chatBackground);
@@ -502,15 +520,34 @@ async function bootstrap() {
     renderUsers();
     if ($("#profilesView").classList.contains("active")) renderProfiles();
     renderVip();
-    await Promise.all([loadFriends(), loadMessages()]);
-    renderUsers();
     connectEvents();
+    loadFriends().catch(() => {});
+    loadMessages().catch((error) => toast(error.message));
     state.lastSyncAt = Date.now();
+    setTimeout(warmFastViews, 1500);
   })();
   try {
     return await state.bootstrapPromise;
   } finally {
     state.bootstrapPromise = null;
+  }
+}
+
+function warmFastViews() {
+  if (!state.token || document.hidden) return;
+  if (!state.storeCache || Date.now() - state.storeCacheAt > 30000) {
+    api("/api/social/store").then((data) => {
+      state.storeCache = data;
+      state.storeCacheAt = Date.now();
+      writeLocalCache("tct_store_cache", { data, at: state.storeCacheAt, userId: state.me?.id });
+    }).catch(() => {});
+  }
+  if (!state.newsCache || Date.now() - state.newsCacheAt > 30000) {
+    api("/api/social/news").then((posts) => {
+      state.newsCache = posts;
+      state.newsCacheAt = Date.now();
+      writeLocalCache("tct_news_cache", { data: posts, at: state.newsCacheAt });
+    }).catch(() => {});
   }
 }
 
@@ -930,7 +967,7 @@ function renderProfiles() {
       <button class="icon-action" data-view-profile="${user.id}" type="button">View profile</button>
     </article>
   `).join("");
-  $$("[data-view-profile]").forEach((button) => button.addEventListener("click", () => openProfile(Number(button.dataset.viewProfile))));
+  bindUserActionButtons();
 }
 
 function renderVip() {
@@ -960,17 +997,40 @@ function renderVip() {
 async function renderChatStore({ force = false } = {}) {
   const root = $("#chatStore");
   if (!root) return;
-  if (!force && state.storeCache) return paintChatStore(state.storeCache);
-  root.innerHTML = '<div class="store-loading">Opening store...</div>';
-  const data = await api("/api/social/store");
-  state.storeCache = data;
-  paintChatStore(data);
+  const fallback = {
+    gold: Number(state.me?.gold || 0),
+    diamonds: Number(state.me?.diamonds || 0),
+    free: state.me?.rank === "premium",
+    rank: state.me?.rank,
+    selectedFrame: state.me?.frame || "clean",
+    owned: {
+      profileMusic: state.me?.rank === "premium" || Boolean(state.me?.profileMusicUrl),
+      profileFrames: state.me?.rank === "premium" || Boolean(profileFrame(state.me)),
+    },
+  };
+  paintChatStore(state.storeCache || fallback);
+  if (!force && state.storeCache && Date.now() - state.storeCacheAt < 30000) return;
+  try {
+    const data = await api("/api/social/store", force ? { cache: "no-store" } : {});
+    state.storeCache = data;
+    state.storeCacheAt = Date.now();
+    writeLocalCache("tct_store_cache", { data, at: state.storeCacheAt, userId: state.me?.id });
+    if ($("#chatStoreView").classList.contains("active")) paintChatStore(data);
+  } catch (error) {
+    toast(`Store is syncing: ${error.message}`);
+  }
 }
 
 function storePrice(data, currency, amount) {
   if (data.free) return '<span class="store-price free">Free</span>';
   const icon = currency === "gold" ? "/assets/currency-gold.png" : "/assets/currency-diamond.png";
   return `<span class="store-price"><img src="${icon}" alt="" />${compactNumber(amount)} ${currency}</span>`;
+}
+
+function persistStoreCache() {
+  if (!state.storeCache) return;
+  state.storeCacheAt = Date.now();
+  writeLocalCache("tct_store_cache", { data: state.storeCache, at: state.storeCacheAt, userId: state.me?.id });
 }
 
 function paintChatStore(data) {
@@ -1029,6 +1089,7 @@ function paintChatStore(data) {
         const purchase = await api("/api/social/store/purchase", { method: "POST", body: JSON.stringify({ itemCode: "profile-music" }) });
         state.storeCache.owned.profileMusic = true;
         if (!purchase.free) state.storeCache[purchase.currency] = Math.max(0, Number(state.storeCache[purchase.currency]) - Number(purchase.charged));
+        persistStoreCache();
         paintChatStore(state.storeCache);
       }
       $("#profileMusicUpload")?.click();
@@ -1062,6 +1123,7 @@ function paintChatStore(data) {
       state.storeCache.owned.profileFrames = true;
       state.framePickerOpen = false;
       if (!purchase.free) state.storeCache[purchase.currency] = Math.max(0, Number(state.storeCache[purchase.currency]) - Number(purchase.charged));
+      persistStoreCache();
       paintChatStore(state.storeCache);
     } catch (error) {
       toast(error.message);
@@ -1082,6 +1144,7 @@ function paintChatStore(data) {
       const meInList = state.users.find((user) => Number(user.id) === Number(state.me.id));
       if (meInList) meInList.frame = frame;
       state.profileCache.delete(Number(state.me.id));
+      persistStoreCache();
       renderUsers();
       renderProfiles();
       renderMessages();
@@ -1096,15 +1159,14 @@ function paintChatStore(data) {
 async function renderNews({ force = false } = {}) {
   if ($("#newsView").classList.contains("active")) clearNewsUnread();
   syncNewsComposerAccess();
-  if (!force && state.newsCache && Date.now() - state.newsCacheAt < 30000) {
-    paintNews(state.newsCache);
-    return;
-  }
-  $("#newsList").innerHTML = '<div class="view-loading"><span></span><strong>Loading news...</strong></div>';
+  if (state.newsCache) paintNews(state.newsCache);
+  else $("#newsList").innerHTML = '<div class="view-loading"><span></span><strong>Loading news...</strong></div>';
+  if (!force && state.newsCache && Date.now() - state.newsCacheAt < 30000) return;
   const posts = await api("/api/social/news", force ? { cache: "no-store" } : {});
   state.newsCache = posts;
   state.newsCacheAt = Date.now();
-  paintNews(posts);
+  writeLocalCache("tct_news_cache", { data: posts, at: state.newsCacheAt });
+  if ($("#newsView").classList.contains("active")) paintNews(posts);
 }
 
 function paintNews(posts) {
@@ -1229,29 +1291,43 @@ function openNewsComposer() {
   titleInput.focus();
 }
 
-async function renderLeaderboard({ force = false } = {}) {
-  const cached = state.leaderboardCache[state.leaderboardTab];
-  if (!cached || force) $("#leaderboard").innerHTML = '<div class="view-loading"><span></span><strong>Loading leaderboard...</strong></div>';
-  const data = !force && cached && Date.now() - cached.at < 30000
-    ? cached.data
-    : await api(`/api/social/leaderboards?board=${encodeURIComponent(state.leaderboardTab)}`, force ? { cache: "no-store" } : {});
-  state.leaderboardCache[state.leaderboardTab] = { data, at: Date.now() };
+function localLeaderboardData(board) {
+  const key = board === "diamonds" ? "diamonds" : board === "gold" ? "gold" : "xp";
+  const rows = board === "shooters" ? [] : [...state.users]
+    .filter(visibleInUserList)
+    .sort((a, b) => Number(b[key] || 0) - Number(a[key] || 0) || String(a.username).localeCompare(String(b.username)))
+    .slice(0, 20)
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      display_name: user.displayName,
+      avatar_url: user.avatarUrl,
+      rank_name: user.rank,
+      profile_title: user.profileTitle,
+      xp: user.xp,
+      gold: user.gold,
+      diamonds: user.diamonds,
+    }));
+  return { board, rows };
+}
+
+function paintLeaderboard(data, tab = state.leaderboardTab) {
   const labels = { xp: "Top XP", gold: "Top Gold", diamonds: "Top Diamonds", shooters: "Top Shooters" };
-  const rows = data.rows || data[state.leaderboardTab] || [];
+  const rows = data.rows || data[tab] || [];
   $("#leaderboard").innerHTML = `
     <div class="leaderboard-tabs">
-      ${Object.entries(labels).map(([key, label]) => `<button class="${state.leaderboardTab === key ? "active" : ""}" data-board-tab="${key}" type="button">${label}</button>`).join("")}
+      ${Object.entries(labels).map(([key, label]) => `<button class="${tab === key ? "active" : ""}" data-board-tab="${key}" type="button">${label}</button>`).join("")}
     </div>
     <div class="leaderboard-list">
       ${rows.map((user, index) => {
-        const value = state.leaderboardTab === "gold"
+        const value = tab === "gold"
           ? user.gold
-          : state.leaderboardTab === "diamonds"
+          : tab === "diamonds"
             ? user.diamonds
-            : state.leaderboardTab === "shooters"
+            : tab === "shooters"
               ? user.intruder_points
               : user.xp;
-        const meta = state.leaderboardTab === "shooters" ? ` | ${compactNumber(user.intruder_shots || 0)} shots` : "";
+        const meta = tab === "shooters" ? ` | ${compactNumber(user.intruder_shots || 0)} shots` : "";
         return `
           <article class="leaderboard-row">
             <span class="leaderboard-rank">#${index + 1}</span>
@@ -1267,6 +1343,17 @@ async function renderLeaderboard({ force = false } = {}) {
     state.leaderboardTab = button.dataset.boardTab;
     renderLeaderboard().catch((error) => toast(error.message));
   }));
+}
+
+async function renderLeaderboard({ force = false } = {}) {
+  const tab = state.leaderboardTab;
+  const cached = state.leaderboardCache[tab];
+  paintLeaderboard(cached?.data || localLeaderboardData(tab), tab);
+  if (!force && cached && Date.now() - cached.at < 30000) return;
+  const data = await api(`/api/social/leaderboards?board=${encodeURIComponent(tab)}`, force ? { cache: "no-store" } : {});
+  state.leaderboardCache[tab] = { data, at: Date.now() };
+  writeLocalCache("tct_leaderboard_cache", state.leaderboardCache);
+  if ($("#leaderboardView").classList.contains("active") && state.leaderboardTab === tab) paintLeaderboard(data, tab);
 }
 
 async function loadFriends() {
@@ -1379,18 +1466,30 @@ async function openProfile(userId) {
   closeProfileActionsOverlay();
   const requestId = ++state.profileRequestId;
   if (previewUser) {
+    const previewInfo = levelInfo(previewUser.xp);
     $("#profileName").textContent = displayName(previewUser);
     $("#profileHandle").textContent = `@${String(previewUser.username || "user").toLowerCase()}`;
     $("#profileAvatar").src = avatar(previewUser);
+    $("#profileStatusDot").classList.toggle("offline", !previewUser.online);
+    $("#profileRankLine").innerHTML = `${rankBadge(previewUser.rank, previewUser.profileTitle)} <span class="profile-title-dot">-</span> <span class="profile-level">Level ${previewInfo.level}</span>`;
+    $("#profileQuote").textContent = previewUser.mood || "Loading the latest profile details...";
+    $("#profileCover").style.setProperty("--profile-banner", `url('${previewUser.bannerUrl || "/assets/profile-banner.svg"}')`);
+    $("#profileInfo").innerHTML = profileOverviewPanel(previewUser);
+    $("#profileCounters").innerHTML = `<span class="profile-metric"><b>★</b><strong>Level ${previewInfo.level}</strong></span>`;
+    $("#profileMainActions").innerHTML = Number(previewUser.id) === Number(state.me.id)
+      ? '<button class="primary" data-own-action="edit" type="button">Edit Profile</button>'
+      : `<button class="primary" data-pm-user="${previewUser.id}" type="button">Message</button>`;
+    bindUserActionButtons(previewUser.id);
+  } else {
+    $("#profileInfo").innerHTML = '<div class="profile-loading-card"><span></span><strong>Loading profile...</strong></div>';
+    $("#profileCounters").innerHTML = "";
+    $("#profileMainActions").innerHTML = "";
   }
   const previewFrame = profileFrame(previewUser);
   $("#profileFrameOverlay").classList.toggle("active", Boolean(previewFrame));
   $("#profileFrameOverlay").style.backgroundImage = previewFrame ? `url('${profileFrameAssets[previewFrame]}')` : "";
-  $("#profileInfo").innerHTML = '<div class="profile-loading-card"><span></span><strong>Loading profile...</strong></div>';
   $("#profileMore").innerHTML = "";
-  $("#profileCounters").innerHTML = "";
   $("#profileCornerActions").innerHTML = '<button data-close-profile title="Close" type="button">x</button>';
-  $("#profileMainActions").innerHTML = "";
   $("[data-close-profile]")?.addEventListener("click", () => $("#profileModal").close());
   if (!$("#profileModal").open) $("#profileModal").showModal();
   const cached = state.profileCache.get(Number(userId));
@@ -2225,35 +2324,40 @@ async function handleOwnAction(action) {
 }
 
 function bindUserActionButtons(userId) {
-  $$("[data-own-action]").forEach((button) => button.addEventListener("click", () => handleOwnAction(button.dataset.ownAction)));
-  $$("[data-view-profile]").forEach((button) => button.addEventListener("click", () => {
+  const unbound = (selector) => $$(selector).filter((button) => {
+    if (button.dataset.userActionBound) return false;
+    button.dataset.userActionBound = "1";
+    return true;
+  });
+  unbound("[data-own-action]").forEach((button) => button.addEventListener("click", () => handleOwnAction(button.dataset.ownAction)));
+  unbound("[data-view-profile]").forEach((button) => button.addEventListener("click", () => {
     if ($("#userActionModal").open) $("#userActionModal").close();
     $("#drawer").classList.add("hidden");
     openProfile(Number(button.dataset.viewProfile));
   }));
-  $$("[data-pm-user]").forEach((button) => button.addEventListener("click", () => {
+  unbound("[data-pm-user]").forEach((button) => button.addEventListener("click", () => {
     closeProfileActionsOverlay();
     if ($("#profileModal").open) $("#profileModal").close();
     openPm(button.dataset.pmUser);
   }));
-  $$("[data-add-friend]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/friend-requests", { method: "POST", body: JSON.stringify({ toUserId: button.dataset.addFriend }) }); closeProfileActionsOverlay(); toast("Friend request sent."); }));
-  $$("[data-remove-friend-action]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/friends/${button.dataset.removeFriendAction}`, { method: "DELETE" }); await loadFriends(); closeProfileActionsOverlay(); toast("Friend removed."); if ($("#userActionModal").open) $("#userActionModal").close(); }));
-  $$("[data-follow]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/follows", { method: "POST", body: JSON.stringify({ userId: button.dataset.follow }) }); closeProfileActionsOverlay(); toast("Followed."); }));
-  $$("[data-like-profile]").forEach((button) => button.addEventListener("click", async () => {
+  unbound("[data-add-friend]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/friend-requests", { method: "POST", body: JSON.stringify({ toUserId: button.dataset.addFriend }) }); closeProfileActionsOverlay(); toast("Friend request sent."); }));
+  unbound("[data-remove-friend-action]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/friends/${button.dataset.removeFriendAction}`, { method: "DELETE" }); await loadFriends(); closeProfileActionsOverlay(); toast("Friend removed."); if ($("#userActionModal").open) $("#userActionModal").close(); }));
+  unbound("[data-follow]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/follows", { method: "POST", body: JSON.stringify({ userId: button.dataset.follow }) }); closeProfileActionsOverlay(); toast("Followed."); }));
+  unbound("[data-like-profile]").forEach((button) => button.addEventListener("click", async () => {
     const result = await api(`/api/social/profiles/${button.dataset.likeProfile}/like`, { method: "POST" });
     closeProfileActionsOverlay();
     toast(result.liked ? "Profile liked." : "Profile unliked.");
   }));
-  $$("[data-gift]").forEach((button) => button.addEventListener("click", () => { closeProfileActionsOverlay(); openGiftModal(button.dataset.gift); }));
-  $$("[data-share-wallet]").forEach((button) => button.addEventListener("click", () => { closeProfileActionsOverlay(); openShareWalletModal(button.dataset.shareWallet); }));
-  $$("[data-block]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/blocks", { method: "POST", body: JSON.stringify({ userId: button.dataset.block }) }); await loadFriends(); closeProfileActionsOverlay(); toast("User blocked."); }));
-  $$("[data-unblock-action]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/blocks/${button.dataset.unblockAction}`, { method: "DELETE" }); await loadFriends(); closeProfileActionsOverlay(); toast("User unblocked."); if ($("#userActionModal").open) $("#userActionModal").close(); }));
-  $$("[data-report-user]").forEach((button) => button.addEventListener("click", () => {
+  unbound("[data-gift]").forEach((button) => button.addEventListener("click", () => { closeProfileActionsOverlay(); openGiftModal(button.dataset.gift); }));
+  unbound("[data-share-wallet]").forEach((button) => button.addEventListener("click", () => { closeProfileActionsOverlay(); openShareWalletModal(button.dataset.shareWallet); }));
+  unbound("[data-block]").forEach((button) => button.addEventListener("click", async () => { await api("/api/social/blocks", { method: "POST", body: JSON.stringify({ userId: button.dataset.block }) }); await loadFriends(); closeProfileActionsOverlay(); toast("User blocked."); }));
+  unbound("[data-unblock-action]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/blocks/${button.dataset.unblockAction}`, { method: "DELETE" }); await loadFriends(); closeProfileActionsOverlay(); toast("User unblocked."); if ($("#userActionModal").open) $("#userActionModal").close(); }));
+  unbound("[data-report-user]:not([data-report-message])").forEach((button) => button.addEventListener("click", () => {
     if (Number(button.dataset.reportUser) === Number(state.me.id)) return toast("You cannot report yourself.");
     closeProfileActionsOverlay();
     openReportModal({ targetType: "user", targetUserId: button.dataset.reportUser, label: `user #${button.dataset.reportUser}` });
   }));
-  $$("[data-staff-action]").forEach((button) => button.addEventListener("click", () => openStaffActions(button.dataset.staffAction)));
+  unbound("[data-staff-action]").forEach((button) => button.addEventListener("click", () => openStaffActions(button.dataset.staffAction)));
 }
 
 function openStaffActions(userId) {
@@ -2417,7 +2521,7 @@ function openPm(userId, fallbackUser = null) {
     state.activePmUserId = null;
     openPmConversations().catch((error) => toast(error.message));
   });
-  $("[data-view-profile]", $("#drawerBody")).addEventListener("click", () => openProfile(numericUserId));
+  bindUserActionButtons(numericUserId);
   $("#pmForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (state.sendingPm) return;
