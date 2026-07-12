@@ -2831,6 +2831,24 @@ html.returning-user #authScreen { display: none; }
 .intruder-card strong { font-size: .78rem; }
 .intruder-card span { line-height: 1.35; }
 .intruder-card b { color: #fff; }
+.bet-card {
+  display: grid;
+  width: fit-content;
+  max-width: 340px;
+  gap: 4px;
+  border: 1px solid rgba(250,204,21,.34);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: linear-gradient(135deg, rgba(39,27,7,.92), rgba(15,23,42,.84));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 8px 20px rgba(0,0,0,.2);
+}
+.bet-card strong { color: #fef3c7; font-size: .79rem; text-transform: uppercase; }
+.bet-card span { color: #fde68a; font-size: .78rem; font-weight: 850; }
+.bet-won { border-color: rgba(34,197,94,.44); background: linear-gradient(135deg, rgba(7,50,28,.9), rgba(15,23,42,.84)); }
+.bet-won span { color: #bbf7d0; }
+.bet-lost { border-color: rgba(239,68,68,.42); background: linear-gradient(135deg, rgba(61,14,20,.9), rgba(15,23,42,.84)); }
+.bet-lost span { color: #fecaca; }
+.bet-neutral { border-color: rgba(148,163,184,.38); }
 
 .profile-modal { width: min(480px, calc(100% - 24px)); }
 .profile-cover {
@@ -2897,6 +2915,154 @@ html.returning-user #authScreen { display: none; }
 .tool-range-grid select { width: 100%; max-width: none; }
 .value-change-card { border-color: rgba(34,211,238,.2); }
 
+.avatar-frame {
+  position: relative;
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  vertical-align: middle;
+}
+.avatar-frame > img { display: block; }
+.avatar-frame.has-frame::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--avatar-frame) center / contain no-repeat;
+  filter: drop-shadow(0 3px 7px rgba(0,0,0,.42));
+}
+.user-row .avatar-frame > .avatar { width: 34px; height: 34px; }
+.message-avatar-button .avatar-frame > .avatar { width: 36px; height: 36px; }
+.profile-card > .avatar-frame { width: 70px; height: 70px; }
+.profile-card > .avatar-frame > .profile-card-avatar { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; }
+.profile-card > .avatar-frame.has-frame::after { inset: -4px; }
+.profile-frame-overlay {
+  position: absolute;
+  inset: -17px;
+  z-index: 3;
+  display: none;
+  pointer-events: none;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  filter: drop-shadow(0 8px 14px rgba(0,0,0,.45));
+}
+.profile-frame-overlay.active { display: block; }
+.profile-status-dot { z-index: 4; }
+.message-pending { opacity: .68; }
+.message-pending .message-card::after { animation: pendingPulse 1s ease-in-out infinite; }
+
+.store-panel { height: 100%; overflow: auto; }
+.store-free-note { display: block; margin-top: 4px; color: #facc15; font-size: .76rem; font-weight: 800; }
+#chatStore { display: grid; gap: 16px; }
+.store-loading,
+.view-loading,
+.profile-loading-card {
+  display: grid;
+  min-height: 130px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--muted);
+}
+.store-loading::before,
+.view-loading span,
+.profile-loading-card span {
+  content: "";
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255,255,255,.12);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.store-wallet-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.store-wallet-row > span {
+  display: grid;
+  grid-template-columns: 34px auto;
+  align-items: center;
+  gap: 0 9px;
+  min-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,.055);
+}
+.store-wallet-row img { grid-row: 1 / 3; width: 34px; height: 34px; object-fit: contain; }
+.store-wallet-row strong { font-size: 1.1rem; }
+.store-wallet-row small { color: var(--muted); }
+.store-grid { display: grid; gap: 14px; }
+.store-item-card {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 18px;
+  background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(8,15,28,.72));
+  box-shadow: 0 14px 34px rgba(0,0,0,.18);
+}
+.store-item-copy { display: grid; align-content: start; gap: 12px; }
+.store-item-copy h3, .store-item-copy p { margin: 0; }
+.store-item-copy p { color: var(--muted); line-height: 1.5; }
+.store-item-art { display: grid; min-height: 130px; place-items: center; border-radius: 18px; background: radial-gradient(circle, rgba(168,85,247,.32), rgba(34,211,238,.08)); }
+.music-art span { font-size: 4rem; color: #c4b5fd; filter: drop-shadow(0 0 18px #8b5cf6); }
+.store-price { display: inline-flex; width: fit-content; align-items: center; gap: 7px; border-radius: 999px; padding: 7px 11px; background: rgba(255,255,255,.08); font-weight: 900; }
+.store-price img { width: 22px; height: 22px; object-fit: contain; }
+.store-price.free { color: #052e16; background: linear-gradient(135deg, #86efac, #22d3ee); }
+.frame-store-card { grid-template-columns: 1fr; }
+.store-frame-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.store-frame-choice { display: grid; justify-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 16px; padding: 12px; color: var(--text); background: rgba(255,255,255,.04); text-align: center; }
+.store-frame-choice:hover, .store-frame-choice.active { border-color: var(--cyan); background: rgba(34,211,238,.1); transform: translateY(-2px); }
+.store-frame-choice small { color: var(--muted); line-height: 1.3; }
+.store-frame-preview { position: relative; display: grid; width: 92px; height: 92px; place-items: center; }
+.store-frame-preview img { width: 68px; height: 68px; border-radius: 50%; object-fit: cover; }
+.store-frame-preview::after { content: ""; position: absolute; inset: 0; background: var(--store-frame) center / contain no-repeat; filter: drop-shadow(0 5px 8px rgba(0,0,0,.42)); }
+.store-unlock-button { grid-column: 1 / -1; justify-self: start; }
+
+.policy-panel { height: 100%; overflow: auto; }
+.policy-intro { max-width: 78ch; margin: 0 0 18px; color: #d9e1ee; line-height: 1.65; }
+.rules-list,
+.command-directory { display: grid; gap: 10px; }
+.rules-list article,
+.command-directory article {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(255,255,255,.045);
+}
+.rules-list article > span,
+.command-directory article > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 11px;
+  color: #07111f;
+  background: linear-gradient(135deg, var(--cyan), #c4b5fd);
+  font-weight: 1000;
+}
+.rules-list h3,
+.rules-list p,
+.command-directory h3,
+.command-directory p { margin: 0; }
+.rules-list p,
+.command-directory p { margin-top: 6px; color: #cbd5e1; line-height: 1.55; }
+.command-directory small { display: block; margin-top: 7px; color: var(--muted); }
+.command-directory code { border-radius: 7px; padding: 2px 6px; color: #a5f3fc; background: rgba(34,211,238,.09); }
+.enforcement-card { margin-top: 14px; border: 1px solid rgba(239,68,68,.25); border-radius: 18px; padding: 16px; background: linear-gradient(135deg, rgba(239,68,68,.09), rgba(255,255,255,.035)); }
+.enforcement-card h3 { margin: 0 0 8px; }
+.enforcement-card p { color: #cbd5e1; line-height: 1.55; }
+.enforcement-card strong { display: block; margin-top: 12px; color: #f8fafc; }
+
+@keyframes pendingPulse { 50% { opacity: .25; } }
+
 .image-lightbox {
   width: 100vw;
   max-width: none;
@@ -2914,6 +3080,11 @@ html.returning-user #authScreen { display: none; }
   .edit-field-grid.compact-fields,
   .tool-range-grid { grid-template-columns: 1fr; }
   .profile-counter-row { max-width: calc(100% - 110px); overflow-x: auto; }
+  .store-item-card { grid-template-columns: 1fr; padding: 14px; }
+  .store-item-art { min-height: 94px; }
+  .store-frame-grid { grid-template-columns: 1fr; }
+  .store-frame-choice { grid-template-columns: 82px 1fr; justify-items: start; align-items: center; text-align: left; }
+  .store-frame-choice small { grid-column: 2; }
 }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
