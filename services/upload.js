@@ -25,10 +25,23 @@ function imageUpload(folder) {
   });
 }
 
+function audioUpload(folder) {
+  return multer({
+    storage: storage(folder),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const extension = path.extname(file.originalname).toLowerCase();
+      const allowedType = ["audio/mpeg", "audio/mp3", "application/octet-stream"].includes(file.mimetype);
+      if (extension !== ".mp3" || !allowedType) return cb(new Error("Only MP3 files are allowed."));
+      cb(null, true);
+    },
+  });
+}
+
 function fileToDataUrl(file) {
   if (!file) return null;
   const folder = path.basename(path.dirname(file.path));
   return `/uploads/${encodeURIComponent(folder)}/${encodeURIComponent(file.filename)}`;
 }
 
-module.exports = { imageUpload, fileToDataUrl };
+module.exports = { audioUpload, imageUpload, fileToDataUrl };
