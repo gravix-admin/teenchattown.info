@@ -412,16 +412,14 @@ function openImageZoom(src) {
   const image = $("#imageLightboxImage");
   if (!lightbox || !image || !src) return;
   image.src = src;
-  lightbox.classList.remove("hidden");
-  lightbox.setAttribute("aria-hidden", "false");
+  if (!lightbox.open) lightbox.showModal();
 }
 
 function closeImageZoom() {
   const lightbox = $("#imageLightbox");
   const image = $("#imageLightboxImage");
   if (!lightbox || !image) return;
-  lightbox.classList.add("hidden");
-  lightbox.setAttribute("aria-hidden", "true");
+  if (lightbox.open) lightbox.close();
   image.removeAttribute("src");
 }
 
@@ -460,9 +458,8 @@ async function bootstrap() {
     renderUsers();
     if ($("#profilesView").classList.contains("active")) renderProfiles();
     renderVip();
-    await loadFriends();
+    await Promise.all([loadFriends(), loadMessages()]);
     renderUsers();
-    await loadMessages();
     connectEvents();
     state.lastSyncAt = Date.now();
   })();
@@ -637,24 +634,24 @@ function renderIntruderMessage(payload) {
   if (type === "alert") {
     return `
       <div class="intruder-card intruder-alert">
-        <strong>Intruder</strong>
-        <span>${compactNumber(Number(payload.points || 0))} pts</span>
+        <strong>Intruder has arrived</strong>
+        <span>Say <b>shoot</b> to murder him for ${compactNumber(Number(payload.points || 0))} points.</span>
       </div>
     `;
   }
   if (type === "shot") {
     return `
       <div class="intruder-card intruder-shot">
-        <strong>Shot by ${html(payload.username || "someone")}</strong>
-        <span>${compactNumber(Number(payload.total || 0))} total</span>
+        <strong>Intruder has been shot</strong>
+        <span>Taken down by <b>${html(payload.username || "someone")}</b>. Total points: ${compactNumber(Number(payload.total || 0))}.</span>
       </div>
     `;
   }
   if (type === "survived") {
     return `
       <div class="intruder-card intruder-survived">
-        <strong>Escaped</strong>
-        <span>Try next round</span>
+        <strong>Intruder escaped</strong>
+        <span>Nobody shot in time. Watch for the next arrival.</span>
       </div>
     `;
   }
@@ -1205,9 +1202,10 @@ async function openProfile(userId) {
   $("#profileMainActions").innerHTML = self
     ? `<button class="primary" data-own-action="edit" type="button">Edit Profile</button>`
     : `<button class="primary" data-pm-user="${user.id}" type="button">Message</button>${state.friends.some((item) => Number(item.id || item.friend_id) === Number(user.id)) ? `<button data-remove-friend-action="${user.id}" type="button">Remove Friend</button>` : `<button data-add-friend="${user.id}" type="button">Add Friend</button>`}`;
-  $("#profileInfo").innerHTML = `
+  $("#profileInfo").innerHTML = profileOverviewPanel(user);
+  $("#profileMore").innerHTML = `
     <div class="profile-overview-card">
-      <h3>Overview</h3>
+      <h3>About ${html(displayName(user))}</h3>
       <p>${html(user.aboutMe || user.bio || "This profile is still being decorated.")}</p>
       <div class="profile-stat-grid">
         <article><span>Messages</span><strong>${compactNumber(user.messageCount || 0)}</strong></article>
@@ -1218,7 +1216,6 @@ async function openProfile(userId) {
     </div>
     ${user.profileMusicUrl ? `<div class="profile-music"><span>Profile music</span><audio controls src="${html(user.profileMusicUrl)}"></audio></div>` : ""}
   `;
-  $("#profileMore").innerHTML = profileMorePanel(user);
   $("#profileFriends").innerHTML = "";
   $("#profileBadges").innerHTML = "";
   $("#profileActivity").innerHTML = "";
@@ -1245,13 +1242,13 @@ function compactNumber(value) {
   return new Intl.NumberFormat([], { notation: "compact", maximumFractionDigits: 1 }).format(Number(value || 0));
 }
 
-function profileMorePanel(user) {
+function profileOverviewPanel(user) {
   const details = [
     ["Gender", user.gender || "Not set"],
     ["Age", user.age ? `${user.age} years` : "Hidden"],
+    ["Country", user.country || "Not detected"],
     ["Last online", formatDate(user.lastSeen)],
     ["Member since", formatDate(user.createdAt)],
-    ["Current room", state.rooms.find((room) => Number(room.id) === Number(state.currentRoomId))?.name || "Main Room"],
   ];
   return `
     <div class="profile-detail-bubbles">
@@ -1552,7 +1549,10 @@ function openUserActions(userId) {
     </div>
   `;
   bindUserActionButtons(user.id);
-  $("[data-user-action-panel]")?.addEventListener("click", () => openUserActionPanel(user.id));
+  $("[data-user-action-panel]")?.addEventListener("click", async () => {
+    await openProfile(user.id);
+    openProfileActionsDrawer(user.id, user);
+  });
   showDrawer();
 }
 
@@ -1646,7 +1646,11 @@ async function openDeveloperToolsPanel() {
           <span><strong>${html(intruder?.botName || "Intruder")}</strong><small>${intruder?.enabled ? "Running" : "Stopped"} | ${html(intruderActive)}</small></span>
         </div>
         <form id="drawerIntruderToolsForm" class="tool-form">
-          <label>Interval minutes<input id="drawerIntruderInterval" type="number" min="5" step="5" value="${html(intruder?.intervalMinutes || 5)}" /></label>
+          <div class="tool-range-grid">
+            <label>Minimum minutes<input id="drawerIntruderMin" type="number" min="2" max="1440" step="1" value="${html(intruder?.minIntervalMinutes || 2)}" /></label>
+            <label>Maximum minutes<input id="drawerIntruderMax" type="number" min="2" max="1440" step="1" value="${html(intruder?.maxIntervalMinutes || 6)}" /></label>
+          </div>
+          <small>Each next arrival is picked randomly inside this range.</small>
           <small>Next arrival: ${html(intruderNext)}</small>
           <label class="tool-enable-row"><input data-chief-tool="intruderTool" type="checkbox" ${data.toolAccess?.intruderTool ? "checked" : ""} /> Enable for chief</label>
           <div class="tool-actions">
@@ -1663,6 +1667,20 @@ async function openDeveloperToolsPanel() {
         </div>
         <label class="tool-enable-row"><input data-chief-tool="profileEditTool" type="checkbox" ${data.toolAccess?.profileEditTool ? "checked" : ""} /> Enable for chief</label>
       </article>
+      <article class="tool-card value-change-card">
+        <div class="tool-card-head">
+          <span class="tool-avatar">C</span>
+          <span><strong>Change user value</strong><small>Developer-only balance, XP, and shooter-score control.</small></span>
+        </div>
+        <form id="developerValueChangeForm" class="tool-form">
+          <label>User<select name="userId" required>${data.users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(state.me.id) ? "selected" : ""}>${html(user.username)}${Number(user.id) === Number(state.me.id) ? " (you)" : ""}</option>`).join("")}</select></label>
+          <div class="tool-range-grid">
+            <label>Change<select name="field"><option value="gold">Gold</option><option value="diamonds">Diamonds</option><option value="xp">XP</option><option value="shoot">Shoot score</option></select></label>
+            <label>Set value<input name="value" type="number" min="0" step="1" value="0" required /></label>
+          </div>
+          <button class="primary" type="submit">Change</button>
+        </form>
+      </article>
     </div>
   `;
   $$("[data-chief-tool]").forEach((input) => input.addEventListener("change", async () => {
@@ -1672,14 +1690,16 @@ async function openDeveloperToolsPanel() {
   }));
   $("#drawerIntruderToolsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const intervalMinutes = Number($("#drawerIntruderInterval")?.value || 5);
-    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: true, intervalMinutes }) });
+    const minIntervalMinutes = Number($("#drawerIntruderMin")?.value || 2);
+    const maxIntervalMinutes = Number($("#drawerIntruderMax")?.value || 6);
+    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: true, minIntervalMinutes, maxIntervalMinutes }) });
     toast("Intruder saved.");
     await openDeveloperToolsPanel();
   });
   $("#drawerIntruderStopButton")?.addEventListener("click", async () => {
-    const intervalMinutes = Number($("#drawerIntruderInterval")?.value || 5);
-    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: false, intervalMinutes }) });
+    const minIntervalMinutes = Number($("#drawerIntruderMin")?.value || 2);
+    const maxIntervalMinutes = Number($("#drawerIntruderMax")?.value || 6);
+    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: false, minIntervalMinutes, maxIntervalMinutes }) });
     toast("Intruder stopped.");
     await openDeveloperToolsPanel();
   });
@@ -1687,6 +1707,14 @@ async function openDeveloperToolsPanel() {
     if (!confirm("Reset Top Shooters to 0?")) return;
     await api("/api/admin/tools/intruder/reset", { method: "POST" });
     toast("Top Shooters reset.");
+    await openDeveloperToolsPanel();
+  });
+  $("#developerValueChangeForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = Object.fromEntries(new FormData(event.currentTarget));
+    await api("/api/admin/tools/user-values", { method: "POST", body: JSON.stringify(form) });
+    toast("User value changed.");
+    await bootstrap();
     await openDeveloperToolsPanel();
   });
 }
@@ -1818,6 +1846,12 @@ function openChatOptionsPanel() {
 function openProfileEditor(section = "edit") {
   const form = $("#editProfileForm");
   if (form && state.me) {
+    const canSetTitle = Boolean(state.permissions?.customTitle || state.me.rank === "developer");
+    const canSetStatus = Boolean(state.permissions?.invisibleStatus || state.me.rank === "developer");
+    $("[data-title-field]")?.classList.toggle("hidden", !canSetTitle);
+    $("[data-status-field]")?.classList.toggle("hidden", !canSetStatus);
+    form.profileTitle.disabled = !canSetTitle;
+    form.profileStatus.disabled = !canSetStatus;
     form.displayName.value = state.me.displayName || state.me.username || "";
     form.username.value = state.me.username || "";
     form.bio.value = state.me.bio || "";
@@ -2319,8 +2353,11 @@ async function renderAdmin() {
           <span><strong>${html(intruder.botName || "Intruder")}</strong><small>${intruder.enabled ? "Running" : "Stopped"} | ${html(intruderActive)}</small></span>
         </div>
         <form id="intruderToolsForm" class="tool-form">
-          <label>Interval minutes<input id="intruderInterval" type="number" min="5" step="5" value="${html(intruder.intervalMinutes || 5)}" /></label>
-          <small>Next arrival: ${html(intruderNext)}</small>
+          <div class="tool-range-grid">
+            <label>Minimum minutes<input id="intruderMin" type="number" min="2" max="1440" step="1" value="${html(intruder.minIntervalMinutes || 2)}" /></label>
+            <label>Maximum minutes<input id="intruderMax" type="number" min="2" max="1440" step="1" value="${html(intruder.maxIntervalMinutes || 6)}" /></label>
+          </div>
+          <small>Every arrival is randomized inside the range. Next arrival: ${html(intruderNext)}</small>
           <div class="tool-actions">
             <button class="primary" type="submit">${intruder.enabled ? "Save" : "Start"}</button>
             <button id="intruderStopButton" type="button" ${intruder.enabled ? "" : "disabled"}>Stop</button>
@@ -2415,14 +2452,16 @@ async function renderAdmin() {
   });
   $("#intruderToolsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const intervalMinutes = Number($("#intruderInterval")?.value || 5);
-    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: true, intervalMinutes }) });
+    const minIntervalMinutes = Number($("#intruderMin")?.value || 2);
+    const maxIntervalMinutes = Number($("#intruderMax")?.value || 6);
+    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: true, minIntervalMinutes, maxIntervalMinutes }) });
     toast("Intruder started.");
     await renderAdmin();
   });
   $("#intruderStopButton")?.addEventListener("click", async () => {
-    const intervalMinutes = Number($("#intruderInterval")?.value || 5);
-    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: false, intervalMinutes }) });
+    const minIntervalMinutes = Number($("#intruderMin")?.value || 2);
+    const maxIntervalMinutes = Number($("#intruderMax")?.value || 6);
+    await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: false, minIntervalMinutes, maxIntervalMinutes }) });
     toast("Intruder stopped.");
     await renderAdmin();
   });
@@ -2951,6 +2990,8 @@ function bindEvents() {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget));
     payload.showOnlineStatus = event.currentTarget.showOnlineStatus.checked;
+    if (event.currentTarget.profileTitle.disabled) delete payload.profileTitle;
+    if (event.currentTarget.profileStatus.disabled) delete payload.profileStatus;
     delete payload.level;
     await api("/api/auth/me", { method: "PATCH", body: JSON.stringify(payload) });
     if ($("#avatarUpload").files[0]) {
