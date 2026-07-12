@@ -1,13 +1,16 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const pool = require("../database");
 const { requireAuth, isStaff } = require("../middleware/auth");
 const { notifyUser, broadcast } = require("../services/events");
 const { publicUser } = require("../services/userService");
-const { imageUpload, fileToDataUrl } = require("../services/upload");
+const { audioUpload, imageUpload, fileToDataUrl } = require("../services/upload");
 
 const router = express.Router();
 const galleryUpload = imageUpload("gallery");
 const newsUpload = imageUpload("news");
+const profileMusicUpload = audioUpload("profile-music");
 const INTRUDER_PREFIX = "::intruder:";
 const giftCatalog = {
   rose: { title: "Rose", costGold: 50 },
@@ -22,6 +25,37 @@ const svipPlans = {
   lifetime: { label: "Lifetime", days: 36500, diamonds: 1000, gold: 25000 },
 };
 const rankPower = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
+const freeStoreRanks = new Set(["premium"]);
+const storeItems = {
+  "profile-music": { currency: "gold", cost: 2000 },
+  "profile-frames": { currency: "diamonds", cost: 100 },
+};
+const storeFrames = new Set(["cosmic", "solar", "prism", "gothic", "angelic", "classic-gold"]);
+const responseCache = { news: null, newsAt: 0, leaderboards: new Map() };
+
+function clearNewsCache() {
+  responseCache.news = null;
+  responseCache.newsAt = 0;
+}
+
+async function hasStoreItem(user, itemCode) {
+  if (freeStoreRanks.has(user.rank_name)) return true;
+  const [[owned]] = await pool.query("SELECT id FROM user_store_items WHERE user_id = ? AND item_code = ? LIMIT 1", [user.id, itemCode]);
+  return Boolean(owned);
+}
+
+async function requireProfileMusicAccess(req, res, next) {
+  if (!(await hasStoreItem(req.user, "profile-music"))) return res.status(403).json({ error: "Unlock Profile Music from the Chat Store first." });
+  next();
+}
+
+function receiveProfileMusic(req, res, next) {
+  profileMusicUpload.single("music")(req, res, (error) => {
+    if (!error) return next();
+    if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "MP3 must be under 10 MB." });
+    return res.status(400).json({ error: error.message || "Could not upload this MP3." });
+  });
+}
 
 async function notification(userId, type, title, body = "") {
   const [result] = await pool.query(
@@ -145,28 +179,26 @@ router.post("/profiles/:id/like", requireAuth, async (req, res) => {
 });
 
 router.get("/profiles/:id", requireAuth, async (req, res) => {
-  await pool.query("UPDATE users SET visitor_count = visitor_count + 1 WHERE id = ?", [req.params.id]);
   const [[user]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.params.id]);
   if (!user || isSystemUser(user)) return res.status(404).json({ error: "Profile not found." });
-  const [badges] = await pool.query(
-    `SELECT a.* FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id WHERE ua.user_id = ? ORDER BY ua.created_at DESC`,
-    [req.params.id]
-  );
-  const [gallery] = await pool.query("SELECT * FROM profile_gallery WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", [req.params.id]);
-  const [wall] = await pool.query(
-    `SELECT wp.*, u.username, u.avatar_url FROM wall_posts wp JOIN users u ON u.id = wp.author_id WHERE wp.profile_user_id = ? ORDER BY wp.created_at DESC LIMIT 20`,
-    [req.params.id]
-  );
-  const [gifts] = await pool.query(
-    `SELECT g.*, u.username AS from_username, u.avatar_url AS from_avatar_url
-     FROM gifts g JOIN users u ON u.id = g.from_user_id
-     WHERE g.to_user_id = ? ORDER BY g.created_at DESC LIMIT 12`,
-    [req.params.id]
-  );
-  const [[likes]] = await pool.query("SELECT COUNT(*) AS total FROM profile_likes WHERE profile_user_id = ?", [req.params.id]);
-  const [[liked]] = await pool.query("SELECT id FROM profile_likes WHERE profile_user_id = ? AND liker_id = ?", [req.params.id, req.user.id]);
+  pool.query("UPDATE users SET visitor_count = visitor_count + 1 WHERE id = ?", [req.params.id]).catch(() => {});
+  const [[badges], [gifts], [[likes]], [[liked]]] = await Promise.all([
+    pool.query(
+      `SELECT a.* FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id WHERE ua.user_id = ? ORDER BY ua.created_at DESC LIMIT 12`,
+      [req.params.id]
+    ),
+    pool.query(
+      `SELECT g.id, g.title, g.gift_code, g.created_at, u.username AS from_username
+       FROM gifts g JOIN users u ON u.id = g.from_user_id
+       WHERE g.to_user_id = ? ORDER BY g.created_at DESC LIMIT 8`,
+      [req.params.id]
+    ),
+    pool.query("SELECT profile_likes AS total FROM users WHERE id = ?", [req.params.id]),
+    pool.query("SELECT id FROM profile_likes WHERE profile_user_id = ? AND liker_id = ? LIMIT 1", [req.params.id, req.user.id]),
+  ]);
   user.profile_likes = likes.total;
-  res.json({ user: publicUser(user, req.user), badges, gallery, wall, gifts, likedByMe: Boolean(liked), likeCount: likes.total });
+  res.set("Cache-Control", "private, no-store");
+  res.json({ user: publicUser(user, req.user), badges, gifts, likedByMe: Boolean(liked), likeCount: likes.total });
 });
 
 router.post("/profiles/:id/wall", requireAuth, async (req, res) => {
@@ -287,6 +319,75 @@ router.post("/wallet-transfers", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/store", requireAuth, async (req, res) => {
+  const [ownedRows] = await pool.query("SELECT item_code FROM user_store_items WHERE user_id = ?", [req.user.id]);
+  const owned = new Set(ownedRows.map((row) => row.item_code));
+  const free = freeStoreRanks.has(req.user.rank_name);
+  res.set("Cache-Control", "private, no-store");
+  res.json({
+    gold: Number(req.user.gold || 0),
+    diamonds: Number(req.user.diamonds || 0),
+    free,
+    rank: req.user.rank_name,
+    selectedFrame: req.user.frame || "clean",
+    owned: {
+      profileMusic: free || owned.has("profile-music"),
+      profileFrames: free || owned.has("profile-frames"),
+    },
+  });
+});
+
+router.post("/store/purchase", requireAuth, async (req, res) => {
+  const itemCode = String(req.body.itemCode || "");
+  const item = storeItems[itemCode];
+  if (!item) return res.status(400).json({ error: "Unknown store item." });
+  if (await hasStoreItem(req.user, itemCode)) return res.json({ ok: true, owned: true, free: freeStoreRanks.has(req.user.rank_name) });
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [[user]] = await connection.query("SELECT rank_name, gold, diamonds FROM users WHERE id = ? FOR UPDATE", [req.user.id]);
+    const free = freeStoreRanks.has(user.rank_name);
+    if (!free && Number(user[item.currency] || 0) < item.cost) {
+      await connection.rollback();
+      return res.status(400).json({ error: item.currency === "gold" ? "Insufficient gold." : "Insufficient diamonds." });
+    }
+    if (!free) await connection.query(`UPDATE users SET ${item.currency} = ${item.currency} - ? WHERE id = ?`, [item.cost, req.user.id]);
+    await connection.query("INSERT IGNORE INTO user_store_items (user_id, item_code) VALUES (?, ?)", [req.user.id, itemCode]);
+    await connection.commit();
+    responseCache.leaderboards.clear();
+    broadcast("users-changed", { userId: req.user.id });
+    res.json({ ok: true, owned: true, free, currency: item.currency, charged: free ? 0 : item.cost });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+});
+
+router.post("/store/frame", requireAuth, async (req, res) => {
+  const frame = String(req.body.frame || "");
+  if (!storeFrames.has(frame)) return res.status(400).json({ error: "Choose a valid profile frame." });
+  if (!(await hasStoreItem(req.user, "profile-frames"))) return res.status(403).json({ error: "Unlock Profile Frames from the Chat Store first." });
+  await pool.query("UPDATE users SET frame = ? WHERE id = ?", [frame, req.user.id]);
+  broadcast("users-changed", { userId: req.user.id });
+  res.json({ ok: true, frame });
+});
+
+router.post("/store/profile-music", requireAuth, requireProfileMusicAccess, receiveProfileMusic, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Choose an MP3 file." });
+  const profileMusicUrl = fileToDataUrl(req.file);
+  const [[current]] = await pool.query("SELECT profile_music_url FROM users WHERE id = ?", [req.user.id]);
+  await pool.query("UPDATE users SET profile_music_url = ? WHERE id = ?", [profileMusicUrl, req.user.id]);
+  const previous = String(current?.profile_music_url || "");
+  if (previous.startsWith("/uploads/profile-music/")) {
+    const previousName = path.basename(decodeURIComponent(previous));
+    const previousPath = path.join(__dirname, "..", "uploads", "profile-music", previousName);
+    fs.promises.unlink(previousPath).catch(() => {});
+  }
+  res.status(201).json({ ok: true, profileMusicUrl });
+});
+
 router.post("/reports", requireAuth, async (req, res) => {
   let targetUserId = req.body.targetUserId ? Number(req.body.targetUserId) : null;
   if (targetUserId && targetUserId === Number(req.user.id)) return res.status(400).json({ error: "You cannot report yourself." });
@@ -335,12 +436,16 @@ router.post("/reports", requireAuth, async (req, res) => {
 });
 
 router.get("/news", requireAuth, async (_req, res) => {
+  if (responseCache.news && Date.now() - responseCache.newsAt < 20000) {
+    res.set("Cache-Control", "private, max-age=15");
+    return res.json(responseCache.news);
+  }
   const [rows] = await pool.query(
     `SELECT np.*, u.username, u.avatar_url, u.rank_name
      FROM news_posts np
      JOIN users u ON u.id = np.author_id
      ORDER BY np.created_at DESC
-     LIMIT 30`
+     LIMIT 15`
   );
   const ids = rows.map((row) => row.id);
   let comments = [];
@@ -350,12 +455,16 @@ router.get("/news", requireAuth, async (_req, res) => {
        FROM news_comments nc
        JOIN users u ON u.id = nc.user_id
        WHERE nc.news_id IN (?)
-       ORDER BY nc.created_at ASC`,
+       ORDER BY nc.created_at DESC
+       LIMIT 150`,
       [ids]
     );
     comments = commentRows;
   }
-  res.json(rows.map((row) => ({ ...row, comments: comments.filter((comment) => Number(comment.news_id) === Number(row.id)) })));
+  responseCache.news = rows.map((row) => ({ ...row, comments: comments.filter((comment) => Number(comment.news_id) === Number(row.id)).reverse() }));
+  responseCache.newsAt = Date.now();
+  res.set("Cache-Control", "private, max-age=15");
+  res.json(responseCache.news);
 });
 
 router.post("/news", requireAuth, newsUpload.single("image"), async (req, res) => {
@@ -368,6 +477,7 @@ router.post("/news", requireAuth, newsUpload.single("image"), async (req, res) =
     "INSERT INTO news_posts (author_id, title, body, image_url) VALUES (?, ?, ?, ?)",
     [req.user.id, title, body, imageUrl]
   );
+  clearNewsCache();
   broadcast("news-posted", { id: result.insertId, title });
   res.status(201).json({ id: result.insertId });
 });
@@ -385,6 +495,7 @@ router.post("/news/:id/comments", requireAuth, async (req, res) => {
      WHERE nc.id = ?`,
     [result.insertId]
   );
+  clearNewsCache();
   broadcast("news-posted", { id: post.id, comment: true });
   res.status(201).json(comment);
 });
@@ -393,6 +504,11 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
   const project = "id, username, display_name, avatar_url, rank_name, profile_title, xp, gold, diamonds, message_count";
   const publicUsers = "rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')";
   const board = String(req.query.board || "").toLowerCase();
+  const cached = responseCache.leaderboards.get(board);
+  if (cached && Date.now() - cached.at < 15000) {
+    res.set("Cache-Control", "private, max-age=10");
+    return res.json(cached.data);
+  }
   const queries = {
     xp: () => pool.query(`SELECT ${project} FROM users WHERE ${publicUsers} ORDER BY xp DESC, username ASC LIMIT 20`),
     gold: () => pool.query(`SELECT ${project} FROM users WHERE ${publicUsers} ORDER BY gold DESC, username ASC LIMIT 20`),
@@ -410,7 +526,10 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
   };
   if (queries[board]) {
     const [rows] = await queries[board]();
-    return res.json({ board, rows });
+    const data = { board, rows };
+    responseCache.leaderboards.set(board, { data, at: Date.now() });
+    res.set("Cache-Control", "private, max-age=10");
+    return res.json(data);
   }
   const [xp] = await queries.xp();
   const [gold] = await queries.gold();
