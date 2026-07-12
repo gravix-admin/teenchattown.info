@@ -2,7 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const pool = require("../database");
-const { requireAuth, isStaff } = require("../middleware/auth");
+const { requireAuth, isStaff, invalidateUserCache } = require("../middleware/auth");
 const { notifyUser, broadcast } = require("../services/events");
 const { publicUser } = require("../services/userService");
 const { audioUpload, imageUpload, fileToDataUrl } = require("../services/upload");
@@ -355,6 +355,7 @@ router.post("/store/purchase", requireAuth, async (req, res) => {
     await connection.query("INSERT IGNORE INTO user_store_items (user_id, item_code) VALUES (?, ?)", [req.user.id, itemCode]);
     await connection.commit();
     responseCache.leaderboards.clear();
+    invalidateUserCache(req.user.id);
     broadcast("users-changed", { userId: req.user.id });
     res.json({ ok: true, owned: true, free, currency: item.currency, charged: free ? 0 : item.cost });
   } catch (error) {
@@ -370,6 +371,7 @@ router.post("/store/frame", requireAuth, async (req, res) => {
   if (!storeFrames.has(frame)) return res.status(400).json({ error: "Choose a valid profile frame." });
   if (!(await hasStoreItem(req.user, "profile-frames"))) return res.status(403).json({ error: "Unlock Profile Frames from the Chat Store first." });
   await pool.query("UPDATE users SET frame = ? WHERE id = ?", [frame, req.user.id]);
+  invalidateUserCache(req.user.id);
   broadcast("users-changed", { userId: req.user.id });
   res.json({ ok: true, frame });
 });
@@ -379,6 +381,7 @@ router.post("/store/profile-music", requireAuth, requireProfileMusicAccess, rece
   const profileMusicUrl = fileToDataUrl(req.file);
   const [[current]] = await pool.query("SELECT profile_music_url FROM users WHERE id = ?", [req.user.id]);
   await pool.query("UPDATE users SET profile_music_url = ? WHERE id = ?", [profileMusicUrl, req.user.id]);
+  invalidateUserCache(req.user.id);
   const previous = String(current?.profile_music_url || "");
   if (previous.startsWith("/uploads/profile-music/")) {
     const previousName = path.basename(decodeURIComponent(previous));
