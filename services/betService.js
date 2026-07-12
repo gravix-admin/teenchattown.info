@@ -1,6 +1,7 @@
 const bcrypt = require("bcrypt");
 const pool = require("../database");
 const { broadcast, notifyUser } = require("./events");
+const { invalidateUserCache } = require("../middleware/auth");
 
 const BET_PREFIX = "::bet:";
 const BOT_USERNAME = "TownBot";
@@ -106,6 +107,7 @@ async function handleBetCommand(roomId, user, amount) {
     const nextGold = Math.min(2000000000, Number(account.gold) - wager + resultAmount);
     await connection.query("UPDATE users SET gold = ?, last_bet_at = UTC_TIMESTAMP() WHERE id = ?", [nextGold, user.id]);
     await connection.commit();
+    invalidateUserCache(user.id);
     resultPayload = {
       username: user.username,
       amount: wager,
