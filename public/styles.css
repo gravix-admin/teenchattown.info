@@ -792,7 +792,6 @@ html.returning-user #authScreen { display: none; }
   opacity: .55;
   box-shadow: none;
 }
-#refreshButton.refreshing svg { animation: spin .7s linear infinite; transform-origin: center; }
 .users-toggle-button {
   background: rgba(255,255,255,.11);
 }
@@ -2957,6 +2956,28 @@ html.returning-user #authScreen { display: none; }
 .bet-lost { border-color: rgba(239,68,68,.42); background: linear-gradient(135deg, rgba(61,14,20,.9), rgba(15,23,42,.84)); }
 .bet-lost span { color: #fecaca; }
 .bet-neutral { border-color: rgba(148,163,184,.38); }
+.town-command-card {
+  display: grid;
+  width: fit-content;
+  max-width: 360px;
+  gap: 5px;
+  border: 1px solid rgba(148,163,184,.28);
+  border-radius: 13px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(15,23,42,.96), rgba(30,41,59,.84));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 9px 22px rgba(0,0,0,.22);
+}
+.town-command-card small { color: #94a3b8; font-size: .65rem; font-weight: 950; letter-spacing: .09em; text-transform: uppercase; }
+.town-command-card strong { color: #f8fafc; font-size: .82rem; line-height: 1.4; }
+.town-command-card span { color: #cbd5e1; font-size: .76rem; font-weight: 750; line-height: 1.35; }
+.town-command-card b { color: #f9a8d4; }
+.confess-card { border-color: rgba(192,132,252,.42); background: linear-gradient(135deg, rgba(59,20,83,.92), rgba(15,23,42,.9)); }
+.confess-card small { color: #e9d5ff; }
+.ship-card { border-color: rgba(244,114,182,.43); background: linear-gradient(135deg, rgba(80,18,52,.92), rgba(15,23,42,.9)); }
+.hunt-card { border-color: rgba(34,211,238,.42); background: linear-gradient(135deg, rgba(8,51,68,.92), rgba(15,23,42,.9)); }
+.hunt-card small { color: #a5f3fc; }
+.steal-card.command-success { border-color: rgba(34,197,94,.44); background: linear-gradient(135deg, rgba(7,50,28,.92), rgba(15,23,42,.9)); }
+.steal-card.command-failed { border-color: rgba(248,113,113,.44); background: linear-gradient(135deg, rgba(69,10,20,.92), rgba(15,23,42,.9)); }
 
 .profile-modal { width: min(480px, calc(100% - 24px)); }
 .profile-cover {
