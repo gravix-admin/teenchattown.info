@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Teens Town Chat</title>
-    <meta name="description" content="Teens Town Chat is a real-time teen community with chat rooms, profiles, friends, ranks, staff tools, and MySQL-saved accounts and messages." />
+    <title>TeenChatTown — Live rooms, real friends</title>
+    <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -13,21 +13,21 @@
       <div class="auth-hero">
         <div class="brand"><span>TT</span><strong>Teens Town Chat</strong></div>
         <div class="auth-copy">
-          <span class="eyebrow">Welcome To The Chat</span>
-          <h1>Find your room in Teens Town.</h1>
-          <p>Make friends, jump into live rooms, build your profile, earn ranks, and keep every account, message, friend request, gift, and report saved in MySQL.</p>
+          <span class="eyebrow">Your people are already here</span>
+          <h1>Chat loud. Belong instantly.</h1>
+          <p>Drop into live rooms, build a profile that feels like you, and keep up with friends without the clutter.</p>
         </div>
         <div class="auth-highlights">
           <span>Live rooms</span>
-          <span>Profiles</span>
-          <span>Friends</span>
-          <span>Staff tools</span>
+          <span>Profile music</span>
+          <span>Friends wall</span>
+          <span>Safety first</span>
         </div>
       </div>
       <div class="auth-card">
         <div class="auth-card-heading">
           <span class="eyebrow">New here?</span>
-          <h2>Login or register now</h2>
+          <h2>Step into town</h2>
         </div>
         <div class="auth-tabs">
           <button class="active" data-auth-tab="login" type="button">Login</button>
@@ -80,14 +80,17 @@
 
       <aside class="left">
         <nav class="side-nav">
-          <button data-view="rooms" type="button">Rooms</button>
-          <button data-view="news" class="nav-news-button" type="button"><span>News</span><i id="newsBadge" class="menu-dot hidden" aria-hidden="true"></i></button>
-          <button data-view="leaderboard" type="button">Leaderboard</button>
-          <button data-view="tournament" type="button">Tournament</button>
-          <button data-view="chatStore" type="button">Chat Store</button>
-          <button data-view="rules" type="button">Rules</button>
-          <button data-view="commands" type="button">Commands</button>
-          <button data-view="vip" type="button">Buy S-VIP</button>
+          <p class="nav-kicker">Discover</p>
+          <button data-view="rooms" title="Rooms" aria-label="Rooms" type="button"><span class="nav-mark">R</span><span>Rooms</span></button>
+          <button data-view="wall" title="Friends Wall" aria-label="Friends Wall" type="button"><span class="nav-mark">W</span><span>Friends Wall</span></button>
+          <button data-view="news" class="nav-news-button" title="News" aria-label="News" type="button"><span class="nav-mark">N</span><span>News</span><i id="newsBadge" class="menu-dot hidden" aria-hidden="true"></i></button>
+          <button data-view="leaderboard" title="Leaderboard" aria-label="Leaderboard" type="button"><span class="nav-mark">L</span><span>Leaderboard</span></button>
+          <button data-view="tournament" title="Tournament" aria-label="Tournament" type="button"><span class="nav-mark">T</span><span>Tournament</span></button>
+          <button data-view="chatStore" title="Chat Store" aria-label="Chat Store" type="button"><span class="nav-mark">S</span><span>Chat Store</span></button>
+          <p class="nav-kicker">Community</p>
+          <button data-view="rules" title="Rules" aria-label="Rules" type="button"><span class="nav-mark">!</span><span>Rules</span></button>
+          <button data-view="commands" title="Commands" aria-label="Commands" type="button"><span class="nav-mark">/</span><span>Commands</span></button>
+          <button data-view="vip" title="Buy S-VIP" aria-label="Buy S-VIP" type="button"><span class="nav-mark">V</span><span>Buy S-VIP</span></button>
         </nav>
       </aside>
 
@@ -126,7 +129,8 @@
           </div>
         </section>
 
-        <section class="view" id="roomsView"><div class="panel rooms-panel"><div class="view-head"><h2>Rooms</h2><button data-close-view type="button">Close</button></div><div class="room-grid" id="roomGrid"></div></div></section>
+        <section class="view" id="roomsView"><div class="panel rooms-panel"><div class="room-gallery-hero"><div><span class="eyebrow">Find your vibe</span><h2>Room gallery</h2><p>Open conversations, community spaces, and protected staff rooms—without the maze.</p></div><label class="room-search"><span>Search rooms</span><input id="roomSearch" type="search" placeholder="Music, games, support..." autocomplete="off" /></label></div><div class="room-gallery-toolbar"><span id="roomGalleryCount">0 rooms</span><button data-close-view type="button">Back to chat</button></div><div class="room-grid" id="roomGrid"></div></div></section>
+        <section class="view" id="wallView"><div class="panel wall-hub"><div class="wall-hub-hero"><div><span class="eyebrow">Your circle</span><h2>Friends Wall</h2><p>Short updates from you and the people you have added. Fresh posts load only when you open this space.</p></div><button id="wallRefresh" type="button">Refresh</button></div><form id="friendsWallForm" class="friends-wall-composer"><img id="wallComposerAvatar" alt="" /><input name="body" maxlength="500" placeholder="Share something with your friends..." /><button class="primary" type="submit">Post update</button></form><div class="friends-wall-feed" id="friendsWallFeed"><div class="wall-feed-loading">Opening your wall...</div></div></div></section>
         <section class="view" id="profilesView"><div class="panel"><h2>Profiles</h2><div class="profile-grid" id="profileGrid"></div></div></section>
         <section class="view" id="newsView"><div class="panel news-panel"><div class="view-head"><h2>Town News <span id="newsTitleDot" class="inline-news-dot hidden" aria-hidden="true"></span></h2><div class="view-head-actions"><button id="newsComposeButton" class="news-add-button hidden" title="Post news" aria-label="Post news" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button data-close-view type="button">Close</button></div></div><div id="newsComposerArea" class="news-compose-area hidden"></div><div id="newsList"></div></div></section>
         <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
@@ -183,12 +187,13 @@
         </div>
         <div class="profile-tabs">
           <button class="active" data-profile-tab="info">Overview</button>
+          <button data-profile-tab="wall">Wall</button>
+          <button data-profile-tab="gallery">Gallery</button>
           <button data-profile-tab="more">More</button>
         </div>
         <div class="profile-tab active" id="profileInfo"></div>
-        <div class="profile-tab" id="profileFriends"></div>
-        <div class="profile-tab" id="profileBadges"></div>
-        <div class="profile-tab" id="profileActivity"></div>
+        <div class="profile-tab" id="profileWall"></div>
+        <div class="profile-tab" id="profileGallery"></div>
         <div class="profile-tab" id="profileMore"></div>
       </div>
       <div class="profile-action-overlay hidden" id="profileActionOverlay" aria-hidden="true"></div>
@@ -203,10 +208,10 @@
       </div>
       <form id="editProfileForm" class="stack-form">
         <div class="edit-banner-preview" id="editBannerPreview">
-          <label class="edit-upload-pill">Change Background<input id="bannerUpload" type="file" accept="image/*" /></label>
+          <div class="edit-cover-actions"><label class="edit-upload-pill">Upload cover<input id="bannerUpload" type="file" accept="image/*" /></label><button class="edit-remove-media" id="removeBannerButton" type="button">Remove cover</button></div>
           <div class="edit-avatar-preview">
             <img id="editAvatarPreview" alt="" />
-            <label class="edit-upload-pill small">Change Avatar<input id="avatarUpload" type="file" accept="image/*" /></label>
+            <div class="edit-avatar-actions"><label class="edit-upload-pill small">Upload photo<input id="avatarUpload" type="file" accept="image/*" /></label><button class="edit-remove-media small" id="removeAvatarButton" type="button">Remove</button></div>
           </div>
         </div>
         <section class="edit-profile-card edit-identity-card">
@@ -229,6 +234,14 @@
           <button class="settings-collapse" type="button"><strong>Profile Settings</strong><span>^</span></button>
           <label>Theme Accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" type="button"></button><button data-accent="#a855f7" type="button"></button><button data-accent="#0ea5e9" type="button"></button><button data-accent="#22c55e" type="button"></button><button data-accent="#f97316" type="button"></button></span></label>
           <label class="toggle-row">Show Online Status<input name="showOnlineStatus" type="checkbox" checked /></label>
+        </section>
+        <section class="edit-profile-card profile-sound-card">
+          <div class="edit-section-heading"><strong>Profile soundtrack</strong><small>MP3, up to 10 MB. Playback stops the moment your profile closes.</small></div>
+          <div class="profile-sound-controls">
+            <div class="profile-sound-preview" id="profileSoundPreview"><span>No track added</span></div>
+            <label class="edit-upload-pill">Choose MP3<input id="profileMusicUpload" type="file" accept="audio/mpeg,.mp3" /></label>
+            <button class="edit-remove-media" id="removeProfileMusicButton" type="button">Remove track</button>
+          </div>
         </section>
         <details class="advanced-edit">
           <summary>More profile options</summary>
