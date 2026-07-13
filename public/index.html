@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css?v=20260713-profile-studio" />
+    <link rel="stylesheet" href="/styles.css?v=20260713-town-games" />
   </head>
   <body>
     <section class="auth-screen" id="authScreen">
@@ -69,7 +69,6 @@
         <button class="menu-toggle" id="menuButton" title="Menu" type="button"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div class="brand small"><span>TT</span><strong>Teens Town Chat</strong></div>
         <nav class="top-icons" aria-label="Top actions">
-          <button id="refreshButton" title="Refresh" type="button"><svg viewBox="0 0 24 24"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"/></svg></button>
           <button id="pmIcon" title="Private messages" type="button"><svg viewBox="0 0 24 24"><path d="M3 5h18v12H8l-5 4z"/></svg><em id="pmBadge" class="hidden"></em></button>
           <button id="friendIcon" title="Friend requests" type="button"><svg viewBox="0 0 24 24"><path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5zm8-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg><em id="friendBadge" class="hidden"></em></button>
           <button id="notificationIcon" title="Notifications" type="button"><svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.4-2h-4.8A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3a2 2 0 1 0-4 0v1.3A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg><em id="notificationBadge" class="hidden"></em></button>
@@ -160,7 +159,19 @@
           <article><span>9</span><div><h3>Report Problems Responsibly</h3><p>Use the report feature for rule violations, harmful content, suspicious users, or security issues. False reports and misuse of the reporting system may lead to action against your account.</p></div></article>
           <article><span>10</span><div><h3>Community Safety</h3><p>Any behaviour that harms users, disrupts the community, or misuses the platform may result in moderation action, even if it is not specifically listed above.</p></div></article>
         </div><section class="enforcement-card"><h3>Enforcement</h3><p>Rule violations may result in a warning, message removal, mute, kick, temporary suspension, account restriction, or permanent ban depending on severity and previous behaviour.</p><p>Serious safety concerns may be reported to the appropriate authorities.</p><strong>By continuing to use TeenChatTown, you confirm that you understand and agree to follow these rules.</strong></section></div></section>
-        <section class="view" id="commandsView"><div class="panel policy-panel"><div class="view-head"><h2>Commands</h2><button data-close-view type="button">Close</button></div><div class="command-directory"><article><span>1</span><div><h3><code>/bet</code></h3><p>Use: <code>/bet "gold amount"</code></p><small>Wait 3 minutes before using the bet command again.</small></div></article></div></div></section>
+        <section class="view" id="commandsView">
+          <div class="panel policy-panel">
+            <div class="view-head"><div><span class="eyebrow">TownBot games</span><h2>Commands</h2></div><button data-close-view type="button">Close</button></div>
+            <p class="policy-intro">Type a command in any room. TownBot posts the result instantly.</p>
+            <div class="command-directory">
+              <article><span>1</span><div><h3><code>/bet</code></h3><p><code>/bet 100</code> risks gold for a chance to win up to 5x.</p><small>3-minute cooldown.</small></div></article>
+              <article><span>2</span><div><h3><code>/confess</code></h3><p><code>/confess alexa i love you</code> posts the message through TownBot without showing who sent it.</p><small>The room sees the confession, never the sender.</small></div></article>
+              <article><span>3</span><div><h3><code>/ship</code></h3><p><code>/ship @Ayush @Alex</code> calculates a stable compatibility score and verdict.</p><small>Use two existing usernames.</small></div></article>
+              <article><span>4</span><div><h3><code>/steal</code></h3><p><code>/steal @user</code> attempts to take 5-20% of their carried gold. Getting caught pays them compensation.</p><small>10-minute cooldown after each attempt.</small></div></article>
+              <article><span>5</span><div><h3><code>/hunt</code></h3><p><code>/hunt</code> explores the town and finds 5-50 diamonds.</p><small>10-minute cooldown.</small></div></article>
+            </div>
+          </div>
+        </section>
         <section class="view" id="vipView"><div class="panel"><div class="view-head"><h2>Buy S-VIP</h2><button data-close-view type="button">Close</button></div><div class="vip-grid" id="vipGrid"></div></div></section>
         <section class="view" id="adminView"><div class="admin-dashboard" id="adminDashboard"></div></section>
       </main>
@@ -309,6 +320,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js?v=20260713-profile-studio"></script>
+    <script src="/script.js?v=20260713-town-games"></script>
   </body>
 </html>
