@@ -101,6 +101,10 @@ const assignableRanks = rankOrder.filter((rank) => rank !== "bot");
 const systemUsernames = new Set(["intruder", "zombie"]);
 const slashCommands = [
   ["/bet", "Bet gold: /bet 100 (3 minute cooldown)"],
+  ["/confess", "Post anonymously: /confess your message"],
+  ["/ship", "Check chemistry: /ship @user1 @user2"],
+  ["/steal", "Risk gold: /steal @user (10 minute cooldown)"],
+  ["/hunt", "Find 5-50 diamonds (10 minute cooldown)"],
   ["/clear", "Staff: clear the current room"],
   ["@wb username", "Send a welcome back message"],
   ["/gif", "Search a GIF"],
@@ -126,6 +130,11 @@ const roomBackgroundChoices = [
 const roomBackgroundUrls = Object.fromEntries(roomBackgroundChoices.map(([id, _label, url]) => [id, url]));
 const intruderPrefix = "::intruder:";
 const betPrefix = "::bet:";
+const confessPrefix = "::confess:";
+const shipPrefix = "::ship:";
+const stealPrefix = "::steal:";
+const huntPrefix = "::hunt:";
+const funCommandPrefixes = [confessPrefix, shipPrefix, stealPrefix, huntPrefix];
 const profileFrameAssets = {
   cosmic: "/assets/frame-cosmic.png",
   solar: "/assets/frame-solar.png",
@@ -257,7 +266,7 @@ function isIntruderMessage(message, user = {}) {
 
 function isProtectedSystemMessage(message, user = {}) {
   const body = String(message?.body || "");
-  return isSystemBot(user) || body.startsWith(intruderPrefix) || body.startsWith(betPrefix);
+  return isSystemBot(user) || body.startsWith(intruderPrefix) || body.startsWith(betPrefix) || funCommandPrefixes.some((prefix) => body.startsWith(prefix));
 }
 
 function userById(id) {
@@ -873,10 +882,35 @@ function renderBetMessage(payload) {
   return `<div class="bet-card bet-won"><strong>${username} bet ${amount} gold</strong><span>Won ${Number(payload?.multiplier || 1)}× — result: ${result} gold</span></div>`;
 }
 
+function renderFunCommandMessage(prefix, payload) {
+  if (prefix === confessPrefix) {
+    return `<div class="town-command-card confess-card"><small>Anonymous confession</small><strong>${html(payload?.message || "")}</strong><span>Identity protected by TownBot.</span></div>`;
+  }
+  if (prefix === shipPrefix) {
+    return `<div class="town-command-card ship-card"><small>Compatibility scan</small><strong>${html(payload?.first || "User")} <b>×</b> ${html(payload?.second || "User")}: ${Number(payload?.percent || 0)}%</strong><span>${html(payload?.line || "The results are mysterious.")}</span></div>`;
+  }
+  if (prefix === stealPrefix) {
+    const success = Boolean(payload?.success);
+    return `<div class="town-command-card steal-card ${success ? "command-success" : "command-failed"}"><small>${success ? "Heist successful" : "Heist failed"}</small><strong>${html(payload?.actor || "Someone")} ${success ? `took ${compactNumber(Number(payload?.amount || 0))} gold from` : `paid ${compactNumber(Number(payload?.amount || 0))} gold to`} ${html(payload?.target || "a user")}</strong><span>${html(payload?.line || "TownBot closed the case.")}</span></div>`;
+  }
+  if (prefix === huntPrefix) {
+    return `<div class="town-command-card hunt-card"><small>Diamond hunt</small><strong>${html(payload?.username || "A hunter")} found ${compactNumber(Number(payload?.reward || 0))} diamonds</strong><span>${html(payload?.line || "The trail paid off.")}</span></div>`;
+  }
+  return "";
+}
+
 function renderMessageBody(body, user = {}) {
   if (body.startsWith(betPrefix)) {
     try {
       return renderBetMessage(JSON.parse(body.slice(betPrefix.length))) || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+  const funPrefix = funCommandPrefixes.find((prefix) => body.startsWith(prefix));
+  if (funPrefix) {
+    try {
+      return renderFunCommandMessage(funPrefix, JSON.parse(body.slice(funPrefix.length))) || "";
     } catch (_error) {
       return "";
     }
@@ -3343,43 +3377,6 @@ async function refreshVisibleData({ force = false } = {}) {
   }
 }
 
-async function refreshActiveViewFast() {
-  if ($("#chatView").classList.contains("active")) return loadMessages();
-  if ($("#wallView").classList.contains("active")) return renderFriendsWall({ force: true });
-  if ($("#newsView").classList.contains("active")) return renderNews({ force: true });
-  if ($("#leaderboardView").classList.contains("active")) return renderLeaderboard({ force: true });
-  if ($("#chatStoreView").classList.contains("active")) return renderChatStore({ force: true });
-  if ($("#adminView").classList.contains("active")) return renderAdmin();
-  if ($("#friendsView").classList.contains("active")) return loadFriends();
-  if ($("#profilesView").classList.contains("active")) return refreshUsersLight();
-  if ($("#roomsView").classList.contains("active")) return renderRoomGrid();
-}
-
-function refreshSecondaryDataInBackground() {
-  const work = [];
-  if (!$("#app")?.classList.contains("right-closed") && Date.now() - Number(state.usersCacheAt || 0) > 15000) work.push(refreshUsersLight());
-  if (Date.now() - Number(state.pmUnreadCacheAt || 0) > 30000) work.push(refreshPmUnread());
-  if (Date.now() - Number(state.friendsCacheAt || 0) > 60000) work.push(loadFriends());
-  Promise.allSettled(work).catch(() => {});
-}
-
-async function manualRefresh() {
-  const button = $("#refreshButton");
-  button.disabled = true;
-  button.classList.add("refreshing");
-  try {
-    await refreshActiveViewFast();
-    state.lastSyncAt = Date.now();
-    refreshSecondaryDataInBackground();
-  } catch (error) {
-    if (error.status === 401 || error.status === 403) return handleAuthFailure(error);
-    toast("Refresh failed. Trying again shortly.");
-  } finally {
-    button.disabled = false;
-    button.classList.remove("refreshing");
-  }
-}
-
 function handleReturnToPage() {
   if (document.hidden) {
     state.hiddenAt = Date.now();
@@ -3543,7 +3540,6 @@ function bindEvents() {
     $("#app").classList.add("right-closed");
     $("#rightToggleButton").setAttribute("aria-expanded", "false");
   });
-  $("#refreshButton").addEventListener("click", () => manualRefresh());
   $("#profileButton").addEventListener("click", () => {
     $("#app").classList.add("right-closed");
     $("#rightToggleButton").setAttribute("aria-expanded", "false");
@@ -3605,7 +3601,8 @@ function bindEvents() {
     const submitButton = $("#messageForm button[type='submit']");
     const roomId = state.currentRoomId;
     const replyToId = state.replyToId;
-    const optimistic = Boolean(body && !state.uploadFile && body.toLowerCase() !== "/clear");
+    const isBotCommand = /^\/(?:bet|confess|ship|steal|hunt)(?:\s|$)/i.test(body);
+    const optimistic = Boolean(body && !state.uploadFile && body.toLowerCase() !== "/clear" && !isBotCommand);
     const pendingId = `pending-${Date.now()}`;
     state.sendingMessage = true;
     submitButton.disabled = true;
@@ -3658,6 +3655,16 @@ function bindEvents() {
             if (state.storeCache) state.storeCache.gold = Number(bet.balance);
           }
         } catch (_error) {}
+      }
+      if (sent.wallet) {
+        if (Number.isFinite(Number(sent.wallet.gold))) {
+          state.me.gold = Number(sent.wallet.gold);
+          if (state.storeCache) state.storeCache.gold = Number(sent.wallet.gold);
+        }
+        if (Number.isFinite(Number(sent.wallet.diamonds))) {
+          state.me.diamonds = Number(sent.wallet.diamonds);
+          if (state.storeCache) state.storeCache.diamonds = Number(sent.wallet.diamonds);
+        }
       }
       if (sent.private && sent.message) toast(sent.message);
       if (!optimistic) {
