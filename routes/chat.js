@@ -6,6 +6,7 @@ const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { addClient, removeClient, broadcast, notifyUser } = require("../services/events");
 const { INTRUDER_PREFIX, handlePossibleShot } = require("../services/intruderService");
 const { BET_PREFIX, handleBetCommand } = require("../services/betService");
+const { FUN_PREFIXES, handleFunCommand } = require("../services/funCommandService");
 const { publicUser } = require("../services/userService");
 
 const router = express.Router();
@@ -59,7 +60,7 @@ async function canDeletePrivateChats(user) {
 
 function isProtectedSystemBody(body) {
   const value = String(body || "");
-  return value.startsWith(INTRUDER_PREFIX) || value.startsWith(BET_PREFIX);
+  return value.startsWith(INTRUDER_PREFIX) || value.startsWith(BET_PREFIX) || FUN_PREFIXES.some((prefix) => value.startsWith(prefix));
 }
 
 async function isProtectedSystemMessage(message) {
@@ -121,6 +122,16 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
       return res.status(result.private ? 200 : 201).json(result);
     } catch (error) {
       return res.status(error.status || 400).json({ error: error.message || "Bet could not be placed." });
+    }
+  }
+  if (/^\/(?:confess|ship|steal|hunt)(?:\s|$)/i.test(body)) {
+    if (req.file) return res.status(400).json({ error: "Commands cannot include an attachment." });
+    if (req.body.replyToId) return res.status(400).json({ error: "Clear the reply before using a command." });
+    try {
+      const result = await handleFunCommand(req.params.roomId, req.user, body);
+      return res.status(201).json(result);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message || "Command could not be completed." });
     }
   }
   if (req.body.replyToId) {
