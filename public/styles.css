@@ -256,6 +256,17 @@ html.returning-user #authScreen { display: none; }
 .top-icons em:empty {
   display: none;
 }
+.top-icons .online-count {
+  right: -7px;
+  top: -6px;
+  color: #04120a;
+  background: #4ade80;
+  box-shadow: 0 0 0 3px rgba(74,222,128,.12), 0 8px 20px rgba(74,222,128,.24);
+}
+.online-users-button[aria-expanded="true"] {
+  color: #dfffea;
+  background: rgba(74,222,128,.12);
+}
 .profile-button { display: flex !important; gap: 8px; padding: 0 6px; }
 .profile-button img, .avatar { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
 .left, .right, .main {
@@ -674,7 +685,7 @@ html.returning-user #authScreen { display: none; }
 .composer-tools { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 9px; }
 .composer-input {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: 6px;
   align-items: center;
   width: 100%;
@@ -800,7 +811,26 @@ html.returning-user #authScreen { display: none; }
   grid-template-columns: 190px minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
+  content-visibility: auto;
+  contain-intrinsic-size: 220px;
 }
+.news-card-content { min-width: 0; }
+.news-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.news-delete-button {
+  display: grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  place-items: center;
+  border: 1px solid rgba(251,113,133,.22);
+  border-radius: 50%;
+  color: #fecdd3;
+  background: rgba(244,63,94,.09);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.news-delete-button:hover { background: rgba(244,63,94,.2); }
 .news-card > img, .news-art {
   width: 100%;
   min-height: 130px;
@@ -3287,7 +3317,7 @@ html.returning-user #authScreen { display: none; }
     padding-bottom: max(8px, env(safe-area-inset-bottom));
   }
   .composer-input {
-    grid-template-columns: 38px minmax(0, 1fr) 38px 38px 38px 38px;
+    grid-template-columns: 38px minmax(0, 1fr) 38px 38px 38px;
     min-height: 48px;
     gap: 4px;
     padding: 4px;
@@ -3554,7 +3584,7 @@ html.returning-user #authScreen { display: none; }
     font-size: 1.05rem;
   }
   .composer-input {
-    grid-template-columns: 34px minmax(46px, 1fr) 34px 34px 34px 34px;
+    grid-template-columns: 34px minmax(46px, 1fr) 34px 34px 34px;
     min-height: 44px;
   }
   .pm-composer {
