@@ -125,4 +125,9 @@ async function handleBetCommand(roomId, user, amount) {
   return sendBetResult(roomId, resultPayload);
 }
 
-module.exports = { BET_PREFIX, handleBetCommand };
+module.exports = {
+  BET_PREFIX,
+  handleBetCommand,
+  ensureTownBot: ensureBetBot,
+  roomMessage,
+};
