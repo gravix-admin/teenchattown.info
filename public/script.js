@@ -413,6 +413,16 @@ function canPostNews() {
   return hasTool("postNews");
 }
 
+function canManageNews() {
+  return ["chief", "developer"].includes(state.me?.rank);
+}
+
+function resetNewsCache() {
+  state.newsCache = null;
+  state.newsCacheAt = 0;
+  localStorage.removeItem("tct_news_cache");
+}
+
 function syncNewsComposerAccess() {
   const allowed = canPostNews();
   $("#newsComposeButton")?.classList.toggle("hidden", !allowed);
@@ -438,10 +448,12 @@ function syncResponsiveLayout() {
   state.compactLayout = compact;
   if (compact) {
     app.classList.add("right-closed");
+    $("#rightToggleButton")?.setAttribute("aria-expanded", "false");
     app.classList.remove("nav-open");
     return;
   }
   app.classList.remove("right-closed");
+  $("#rightToggleButton")?.setAttribute("aria-expanded", "true");
   app.classList.remove("nav-open");
 }
 
@@ -940,6 +952,11 @@ function quoteMessage(messageId) {
 }
 
 function renderUsers() {
+  const allVisibleUsers = state.users.filter(visibleInUserList);
+  const onlineTotal = allVisibleUsers.filter((user) => isOnline(user)).length;
+  const onlineBadge = $("#onlineCountBadge");
+  if (onlineBadge) onlineBadge.textContent = onlineTotal > 99 ? "99+" : String(onlineTotal);
+  if ($("#app")?.classList.contains("right-closed")) return;
   const source = (state.userTab === "friends"
     ? state.friends.map((friend) => userById(friend.id) || {
       id: friend.id,
@@ -1191,10 +1208,13 @@ async function renderNews({ force = false } = {}) {
 
 function paintNews(posts) {
   $("#newsList").innerHTML = posts.map((post) => `
-    <article class="news-card">
+    <article class="news-card" data-news-card="${post.id}">
       ${post.image_url ? `<img class="zoomable-image" data-zoom-src="${html(assetUrl(post.image_url))}" src="${html(assetUrl(post.image_url))}" alt="" loading="lazy" decoding="async" />` : `<div class="news-art"><span>TCT</span></div>`}
-      <div>
-        <span class="eyebrow">Town update</span>
+      <div class="news-card-content">
+        <div class="news-card-top">
+          <span class="eyebrow">Town update</span>
+          ${canManageNews() ? `<button class="news-delete-button" data-delete-news="${post.id}" title="Delete this news" aria-label="Delete ${html(post.title)}" type="button">&times;</button>` : ""}
+        </div>
         <h3>${html(post.title)}</h3>
         <p>${html(post.body)}</p>
         <small>By ${html(post.username)} | ${formatDate(post.created_at)} ${formatTime(post.created_at)}</small>
@@ -1221,14 +1241,28 @@ function paintNews(posts) {
     const body = new FormData(event.currentTarget).get("body");
     if (!String(body || "").trim()) return;
     await api(`/api/social/news/${form.dataset.newsComment}/comments`, { method: "POST", body: JSON.stringify({ body }) });
-    state.newsCache = null;
+    resetNewsCache();
     await renderNews({ force: true });
+  }));
+  $$('[data-delete-news]').forEach((button) => button.addEventListener("click", async () => {
+    if (!confirm("Delete this news post and all of its comments?")) return;
+    button.disabled = true;
+    try {
+      await api(`/api/social/news/${button.dataset.deleteNews}`, { method: "DELETE" });
+      resetNewsCache();
+      button.closest("[data-news-card]")?.remove();
+      if (!$("[data-news-card]")) $("#newsList").innerHTML = '<p class="muted">No news has been posted yet.</p>';
+      toast("News deleted.");
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
   }));
 }
 
 async function submitNewsForm(form) {
   await api("/api/social/news", { method: "POST", body: new FormData(form) });
-  state.newsCache = null;
+  resetNewsCache();
   toast("News posted.");
   form.reset();
   const composer = $("#newsComposerArea");
@@ -2051,8 +2085,8 @@ function openUserActionPanel(userId) {
 }
 
 async function openDeveloperToolsPanel() {
-  if (state.me?.rank !== "developer") return toast("Developer access required.");
-  setDrawerChrome({ title: "Tools" });
+  if (!canManageNews()) return toast("Chief or developer access required.");
+  setDrawerChrome({ title: "Staff tools" });
   $("#drawerBody").innerHTML = '<p class="muted">Loading tools...</p>';
   showDrawer();
   let data;
@@ -2068,7 +2102,16 @@ async function openDeveloperToolsPanel() {
   const intruderActive = intruder?.activeRound ? `Active now | ${compactNumber(intruder.activeRound.points)} pts` : "No active round";
   $("#drawerBody").innerHTML = `
     <div class="developer-tools-drawer">
-      <article class="tool-card intruder-tool-card">
+      <article class="tool-card news-maintenance-card">
+        <div class="tool-card-head">
+          <span class="tool-avatar">N</span>
+          <span><strong>News maintenance</strong><small>Remove all Town News posts and their comments.</small></span>
+        </div>
+        <div class="tool-actions">
+          <button id="drawerClearNewsButton" class="danger-action" type="button">Clear news section</button>
+        </div>
+      </article>
+      <article class="tool-card intruder-tool-card ${intruder ? "" : "hidden"}">
         <div class="tool-card-head">
           <img class="avatar avatar-lg" src="${html(intruder?.botAvatarUrl || "/assets/intruder-bot.png")}" alt="" />
           <span><strong>${html(intruder?.botName || "Intruder")}</strong><small>${intruder?.enabled ? "Running" : "Stopped"} | ${html(intruderActive)}</small></span>
@@ -2080,7 +2123,7 @@ async function openDeveloperToolsPanel() {
           </div>
           <small>Each next arrival is picked randomly inside this range.</small>
           <small>Next arrival: ${html(intruderNext)}</small>
-          <label class="tool-enable-row"><input data-chief-tool="intruderTool" type="checkbox" ${data.toolAccess?.intruderTool ? "checked" : ""} /> Enable for chief</label>
+          ${state.me.rank === "developer" ? `<label class="tool-enable-row"><input data-chief-tool="intruderTool" type="checkbox" ${data.toolAccess?.intruderTool ? "checked" : ""} /> Enable for chief</label>` : ""}
           <div class="tool-actions">
             <button class="primary" type="submit">${intruder?.enabled ? "Save" : "Start"}</button>
             <button id="drawerIntruderStopButton" type="button" ${intruder?.enabled ? "" : "disabled"}>Stop</button>
@@ -2088,14 +2131,14 @@ async function openDeveloperToolsPanel() {
           </div>
         </form>
       </article>
-      <article class="tool-card">
+      <article class="tool-card ${state.me.rank === "developer" ? "" : "hidden"}">
         <div class="tool-card-head">
           <span class="tool-avatar">E</span>
           <span><strong>Edit profile</strong><small>Allows chief to use the Edit tab on lower ranks.</small></span>
         </div>
         <label class="tool-enable-row"><input data-chief-tool="profileEditTool" type="checkbox" ${data.toolAccess?.profileEditTool ? "checked" : ""} /> Enable for chief</label>
       </article>
-      <article class="tool-card value-change-card">
+      <article class="tool-card value-change-card ${state.me.rank === "developer" ? "" : "hidden"}">
         <div class="tool-card-head">
           <span class="tool-avatar">C</span>
           <span><strong>Change user value</strong><small>Developer-only balance, XP, and shooter-score control.</small></span>
@@ -2111,6 +2154,20 @@ async function openDeveloperToolsPanel() {
       </article>
     </div>
   `;
+  $("#drawerClearNewsButton")?.addEventListener("click", async () => {
+    if (!confirm("Clear the entire news section? This deletes every news post and comment.")) return;
+    const button = $("#drawerClearNewsButton");
+    button.disabled = true;
+    try {
+      const result = await api("/api/social/news", { method: "DELETE" });
+      resetNewsCache();
+      if ($("#newsView").classList.contains("active")) paintNews([]);
+      toast(`${result.deleted || 0} news post${Number(result.deleted) === 1 ? "" : "s"} deleted.`);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  });
   $$("[data-chief-tool]").forEach((input) => input.addEventListener("change", async () => {
     await api("/api/admin/tools/access", { method: "POST", body: JSON.stringify({ tool: input.dataset.chiefTool, enabled: input.checked }) });
     toast("Chief access updated.");
@@ -2169,7 +2226,7 @@ function openOwnMenu() {
         <hr />
         <button data-own-action="room-options" type="button"><span class="menu-icon">R</span><strong>Room options</strong><small>${html(room?.name || "Current room")}</small><em>&gt;</em></button>
         ${["admin", "chief", "developer"].includes(state.me.rank) ? `<button data-open-admin-panel type="button"><span class="menu-icon">A</span><strong>Admin panel</strong></button>` : ""}
-        ${state.me.rank === "developer" ? `<button data-open-tools-panel type="button"><span class="menu-icon">T</span><strong>Tools</strong></button>` : ""}
+        ${canManageNews() ? `<button data-open-tools-panel type="button"><span class="menu-icon">T</span><strong>Tools</strong></button>` : ""}
         <button data-own-action="logout" type="button"><span class="menu-icon">O</span><strong>Logout</strong></button>
       </div>
     </div>
@@ -3064,11 +3121,20 @@ const realtimeHandlers = {
   "news-posted"(data = {}) {
     const newsIsOpen = $("#newsView").classList.contains("active");
     if (!data.comment && !newsIsOpen) markNewsUnread();
+    resetNewsCache();
     if (newsIsOpen) {
       clearNewsUnread();
-      state.newsCache = null;
       renderNews({ force: true }).catch((error) => toast(error.message));
     }
+  },
+  "news-deleted"(data = {}) {
+    resetNewsCache();
+    if (data.all) {
+      if ($("#newsView").classList.contains("active")) paintNews([]);
+      return;
+    }
+    $(`[data-news-card="${Number(data.id)}"]`)?.remove();
+    if ($("#newsView").classList.contains("active") && !$("[data-news-card]")) paintNews([]);
   },
   "report-created"() {
     refreshReportBadge().catch(() => {});
@@ -3319,8 +3385,17 @@ function bindEvents() {
   $("#newsComposeButton")?.addEventListener("click", openNewsComposer);
   $("#menuButton").addEventListener("click", () => $("#app").classList.toggle("nav-open"));
   $("#roomSwitchButton")?.addEventListener("click", openRoomSwitcher);
-  $("#rightToggleButton").addEventListener("click", () => $("#app").classList.toggle("right-closed"));
-  $("#closeRightPanel").addEventListener("click", () => $("#app").classList.add("right-closed"));
+  $("#rightToggleButton").addEventListener("click", () => {
+    const app = $("#app");
+    const opening = app.classList.contains("right-closed");
+    app.classList.toggle("right-closed", !opening);
+    $("#rightToggleButton").setAttribute("aria-expanded", String(opening));
+    if (opening) renderUsers();
+  });
+  $("#closeRightPanel").addEventListener("click", () => {
+    $("#app").classList.add("right-closed");
+    $("#rightToggleButton").setAttribute("aria-expanded", "false");
+  });
   $("#refreshButton").addEventListener("click", () => manualRefresh());
   $("#profileButton").addEventListener("click", openOwnMenu);
   $("#pmIcon").addEventListener("click", () => openPmConversations());
@@ -3594,3 +3669,4 @@ if (state.token) {
     }
   });
 }
+
