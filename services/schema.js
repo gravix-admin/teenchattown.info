@@ -171,6 +171,8 @@ async function initSchema() {
       last_seen DATETIME NULL,
       last_online_reward_at DATETIME NULL,
       last_bet_at DATETIME NULL,
+      last_hunt_at DATETIME NULL,
+      last_steal_at DATETIME NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -536,6 +538,8 @@ async function migrateExistingTables() {
       last_seen: "DATETIME NULL",
       last_online_reward_at: "DATETIME NULL",
       last_bet_at: "DATETIME NULL",
+      last_hunt_at: "DATETIME NULL",
+      last_steal_at: "DATETIME NULL",
       token_version: "INT DEFAULT 0",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     },
