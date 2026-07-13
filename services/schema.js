@@ -545,6 +545,7 @@ async function migrateExistingTables() {
       image_url: "MEDIUMTEXT NULL",
       password_hash: "VARCHAR(255) NULL",
       is_pinned: "TINYINT DEFAULT 0",
+      staff_only: "TINYINT DEFAULT 0",
       created_by: "INT NULL",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
     },
@@ -843,6 +844,17 @@ async function seedDefaults() {
         ["Help Desk", "Staff help, reports, rules, and account support.", "/assets/room-support.svg", 0],
       ]]
     );
+  }
+
+  await pool.query(
+    `INSERT INTO rooms (name, description, image_url, is_pinned, staff_only)
+     SELECT 'Staff Lounge', 'A private operations room for moderators and the staff team.', '/assets/room-support.svg', 1, 1
+     WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE staff_only = 1 OR LOWER(name) IN ('staff room', 'staff lounge'))`
+  );
+  const [[unlockedStaffRoom]] = await pool.query("SELECT id FROM rooms WHERE staff_only = 1 AND (password_hash IS NULL OR password_hash = '') LIMIT 1");
+  if (unlockedStaffRoom) {
+    const guardHash = await bcrypt.hash(`${process.env.JWT_SECRET || "teen-chat-town"}:staff-room`, 10);
+    await pool.query("UPDATE rooms SET password_hash = ? WHERE id = ?", [guardHash, unlockedStaffRoom.id]);
   }
 
   for (const rank of ranks) {
