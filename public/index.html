@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css?v=20260713-attachments" />
+    <link rel="stylesheet" href="/styles.css?v=20260713-profile-studio" />
   </head>
   <body>
     <section class="auth-screen" id="authScreen">
@@ -142,7 +142,7 @@
         </section>
 
         <section class="view" id="roomsView"><div class="panel rooms-panel"><div class="room-gallery-hero"><div><span class="eyebrow">Find your vibe</span><h2>Room gallery</h2><p>Open conversations, community spaces, and protected staff rooms—without the maze.</p></div><label class="room-search"><span>Search rooms</span><input id="roomSearch" type="search" placeholder="Music, games, support..." autocomplete="off" /></label></div><div class="room-gallery-toolbar"><span id="roomGalleryCount">0 rooms</span><button data-close-view type="button">Back to chat</button></div><div class="room-grid" id="roomGrid"></div></div></section>
-        <section class="view" id="wallView"><div class="panel wall-hub"><div class="wall-hub-hero"><div><span class="eyebrow">Your circle</span><h2>Friends Wall</h2><p>Short updates from you and the people you have added. Fresh posts load only when you open this space.</p></div><button id="wallRefresh" type="button">Refresh</button></div><form id="friendsWallForm" class="friends-wall-composer"><img id="wallComposerAvatar" alt="" /><input name="body" maxlength="500" placeholder="Share something with your friends..." /><button class="primary" type="submit">Post update</button></form><div class="friends-wall-feed" id="friendsWallFeed"><div class="wall-feed-loading">Opening your wall...</div></div></div></section>
+        <section class="view" id="wallView"><div class="panel wall-hub"><div class="wall-hub-hero"><div><span class="eyebrow">Your circle</span><h2>Friends Wall</h2><p>Short updates from you and the people you have added. Fresh posts load only when you open this space.</p></div><div class="wall-hub-actions"><button id="wallRefresh" type="button">Refresh</button><button data-close-view type="button">Close</button></div></div><form id="friendsWallForm" class="friends-wall-composer"><img id="wallComposerAvatar" alt="" /><input name="body" maxlength="500" placeholder="Share something with your friends..." /><button class="primary" type="submit">Post update</button></form><div class="friends-wall-feed" id="friendsWallFeed"><div class="wall-feed-loading">Opening your wall...</div></div></div></section>
         <section class="view" id="profilesView"><div class="panel"><h2>Profiles</h2><div class="profile-grid" id="profileGrid"></div></div></section>
         <section class="view" id="newsView"><div class="panel news-panel"><div class="view-head"><h2>Town News <span id="newsTitleDot" class="inline-news-dot hidden" aria-hidden="true"></span></h2><div class="view-head-actions"><button id="newsComposeButton" class="news-add-button hidden" title="Post news" aria-label="Post news" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button data-close-view type="button">Close</button></div></div><div id="newsComposerArea" class="news-compose-area hidden"></div><div id="newsList"></div></div></section>
         <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
@@ -219,6 +219,12 @@
         <button class="primary" form="editProfileForm" type="submit">Save</button>
       </div>
       <form id="editProfileForm" class="stack-form">
+        <nav class="edit-profile-nav" aria-label="Profile editor sections">
+          <button data-edit-jump="editIdentityCard" type="button"><span aria-hidden="true">P</span><strong>Profile</strong></button>
+          <button data-edit-jump="editPresenceCard" type="button"><span aria-hidden="true">S</span><strong>Status</strong></button>
+          <button data-edit-jump="editGalleryCard" type="button"><span aria-hidden="true">G</span><strong>Gallery</strong></button>
+          <button data-edit-jump="editSoundCard" type="button"><span aria-hidden="true">M</span><strong>Music</strong></button>
+        </nav>
         <div class="edit-banner-preview" id="editBannerPreview">
           <div class="edit-cover-actions"><label class="edit-upload-pill">Upload cover<input id="bannerUpload" type="file" accept="image/*" /></label><button class="edit-remove-media" id="removeBannerButton" type="button">Remove cover</button></div>
           <div class="edit-avatar-preview">
@@ -226,8 +232,8 @@
             <div class="edit-avatar-actions"><label class="edit-upload-pill small">Upload photo<input id="avatarUpload" type="file" accept="image/*" /></label><button class="edit-remove-media small" id="removeAvatarButton" type="button">Remove</button></div>
           </div>
         </div>
-        <section class="edit-profile-card edit-identity-card">
-          <div class="edit-section-heading"><strong>Profile identity</strong><small>How people see you around town</small></div>
+        <section class="edit-profile-card edit-identity-card" id="editIdentityCard">
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">P</span><div><strong>Profile identity</strong><small>How people see you around town</small></div></div>
           <div class="edit-name-grid">
             <label><span>Display name</span><input name="displayName" placeholder="Name shown in chat" /></label>
             <label><span>Username</span><input name="username" placeholder="Your unique @username" /><small>Username changes require VIP or higher.</small></label>
@@ -235,20 +241,34 @@
           <label><span>Bio</span><span class="bio-count" id="bioCount">0/120</span><textarea name="bio" placeholder="Say something short about yourself" maxlength="120"></textarea></label>
         </section>
         <section class="edit-profile-card edit-access-card">
-          <div class="edit-section-heading"><strong>Account details</strong><small>Permission-based options appear automatically</small></div>
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">ID</span><div><strong>Account details</strong><small>Rank-based options appear automatically</small></div></div>
           <div class="edit-field-grid compact-fields">
             <label data-title-field><span>Role / title</span><input name="profileTitle" placeholder="Custom title" /></label>
             <label><span>Level</span><input name="level" readonly /></label>
-            <label data-status-field><span>Status</span><select name="profileStatus"><option>Online</option><option>Invisible</option></select></label>
           </div>
         </section>
-        <section class="profile-settings-card">
-          <button class="settings-collapse" type="button"><strong>Profile Settings</strong><span>^</span></button>
-          <label>Theme Accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" type="button"></button><button data-accent="#a855f7" type="button"></button><button data-accent="#0ea5e9" type="button"></button><button data-accent="#22c55e" type="button"></button><button data-accent="#f97316" type="button"></button></span></label>
-          <label class="toggle-row">Show Online Status<input name="showOnlineStatus" type="checkbox" checked /></label>
+        <section class="edit-profile-card edit-presence-card" id="editPresenceCard" data-status-field>
+          <div class="edit-section-heading"><span class="edit-card-logo presence-logo" aria-hidden="true"></span><div><strong>Presence</strong><small>Premium, Chief, and Developer status controls</small></div></div>
+          <div class="edit-presence-grid">
+            <label><span>Profile status</span><select name="profileStatus"><option>Online</option><option>Away</option><option>Busy</option><option>Be right back</option><option>Listening to music</option><option>Watching video</option><option>Gaming</option><option>Friendly</option><option>Sad</option><option>Invisible</option></select></label>
+            <div class="status-preview" id="statusPreview"><span></span><div><strong>Online</strong><small>Shown beside your name</small></div></div>
+          </div>
         </section>
-        <section class="edit-profile-card profile-sound-card">
-          <div class="edit-section-heading"><strong>Profile soundtrack</strong><small>MP3, up to 10 MB. Playback stops the moment your profile closes.</small></div>
+        <section class="edit-profile-card profile-settings-card">
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">A</span><div><strong>Profile appearance</strong><small>Choose the accent used across your profile</small></div></div>
+          <label>Theme accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" aria-label="Red accent" type="button"></button><button data-accent="#a855f7" aria-label="Purple accent" type="button"></button><button data-accent="#0ea5e9" aria-label="Blue accent" type="button"></button><button data-accent="#22c55e" aria-label="Green accent" type="button"></button><button data-accent="#f97316" aria-label="Orange accent" type="button"></button></span></label>
+          <label class="toggle-row">Show online activity<input name="showOnlineStatus" type="checkbox" checked /></label>
+        </section>
+        <section class="edit-profile-card edit-gallery-card" id="editGalleryCard">
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">G</span><div><strong>Profile gallery</strong><small>Add and manage the photos shown on your profile</small></div></div>
+          <div class="edit-gallery-uploader">
+            <label class="edit-gallery-drop" id="editGalleryDrop"><span class="edit-gallery-plus" aria-hidden="true">+</span><strong>Choose a photo</strong><small>JPG, PNG, GIF, or WebP up to 4 MB</small><input id="editGalleryUpload" type="file" accept="image/*" /></label>
+            <div class="edit-gallery-meta"><input id="editGalleryCaption" maxlength="180" placeholder="Add a caption (optional)" /><button class="primary" id="editGalleryAddButton" type="button">Add to gallery</button></div>
+          </div>
+          <div class="edit-gallery-grid" id="editGalleryGrid"><div class="edit-gallery-loading">Loading your gallery...</div></div>
+        </section>
+        <section class="edit-profile-card profile-sound-card" id="editSoundCard">
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">M</span><div><strong>Profile soundtrack</strong><small>MP3, up to 10 MB. Playback stops the moment your profile closes.</small></div></div>
           <div class="profile-sound-controls">
             <div class="profile-sound-preview" id="profileSoundPreview"><span>No track added</span></div>
             <label class="edit-upload-pill">Choose MP3<input id="profileMusicUpload" type="file" accept="audio/mpeg,.mp3" /></label>
@@ -256,7 +276,7 @@
           </div>
         </section>
         <details class="advanced-edit">
-          <summary>More profile options</summary>
+          <summary><span class="edit-card-logo" aria-hidden="true">+</span><span>More profile options</span></summary>
           <label>About Me<textarea name="aboutMe" placeholder="About me"></textarea></label>
           <div class="edit-field-grid">
             <label>Mood<input name="mood" placeholder="Mood" /></label>
@@ -289,6 +309,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js?v=20260713-attachments"></script>
+    <script src="/script.js?v=20260713-profile-studio"></script>
   </body>
 </html>
