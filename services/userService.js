@@ -11,13 +11,13 @@ function calculateAge(dob) {
 
 function publicUser(user, viewer = null) {
   if (!user) return null;
-  const canSeePrivate = viewer && ["developer", "chief", "admin"].includes(viewer.rank_name);
+  const canSeePrivate = viewer && (Number(viewer.id) === Number(user.id) || ["developer", "chief", "admin"].includes(viewer.rank_name));
   return {
     id: user.id,
     username: user.username,
     displayName: user.display_name,
     email: canSeePrivate ? user.email : undefined,
-    dob: user.dob,
+    dob: canSeePrivate ? user.dob : undefined,
     age: user.age,
     gender: user.gender,
     rank: user.rank_name,
