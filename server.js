@@ -56,7 +56,9 @@ function staticOptions(maxAge) {
     immutable: maxAge !== "0",
     setHeaders(res, filePath) {
       if (filePath.endsWith(".html")) {
-        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Cache-Control", "no-store");
+      } else if (maxAge === "0") {
+        res.setHeader("Cache-Control", "no-cache, must-revalidate");
       }
     },
   };
@@ -73,7 +75,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(attachUser);
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), staticOptions("30d")));
 app.use("/assets", express.static(path.join(__dirname, "public", "assets"), staticOptions("30d")));
-app.use(express.static(path.join(__dirname, "public"), staticOptions(isProduction ? "1h" : "0")));
+app.use(express.static(path.join(__dirname, "public"), staticOptions("0")));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
@@ -91,6 +93,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get(/.*/, (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
