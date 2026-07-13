@@ -29,6 +29,7 @@ async function roomById(roomId) {
 
 async function canEnterRoom(user, room) {
   if (!room) return false;
+  if (Number(room.staff_only) === 1 && !isStaff(user)) return false;
   if (!room.password_hash) return true;
   if (isStaff(user) || Number(room.created_by) === Number(user.id)) return true;
   const [[access]] = await pool.query("SELECT id FROM room_access WHERE room_id = ? AND user_id = ?", [room.id, user.id]);
@@ -38,6 +39,7 @@ async function canEnterRoom(user, room) {
 async function requireRoomAccess(req, res, next) {
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
+  if (Number(room.staff_only) === 1 && !isStaff(req.user)) return res.status(403).json({ error: "This room is for staff only.", code: "STAFF_ONLY" });
   if (!(await canEnterRoom(req.user, room))) return res.status(403).json({ error: "Room password required.", code: "ROOM_LOCKED" });
   req.room = room;
   next();
@@ -237,10 +239,11 @@ router.post("/rooms", requireAuth, roomUpload.single("image"), async (req, res) 
   const [[permission]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = 'createRoom'", [req.user.rank_name]);
   if (req.user.rank_name !== "developer" && !permission?.allowed) return res.status(403).json({ error: "Your rank cannot create rooms." });
   const passwordHash = req.body.password ? await bcrypt.hash(String(req.body.password), 10) : null;
+  const staffOnly = req.body.staffOnly === "true" || req.body.staffOnly === true ? 1 : 0;
   const imageUrl = req.file ? fileToDataUrl(req.file) : String(req.body.imageUrl || "").trim() || "/assets/room-main.svg";
   const [result] = await pool.query(
-    "INSERT INTO rooms (name, description, image_url, password_hash, created_by) VALUES (?, ?, ?, ?, ?)",
-    [String(req.body.name || "").slice(0, 80), String(req.body.description || "").slice(0, 255), imageUrl, passwordHash, req.user.id]
+    "INSERT INTO rooms (name, description, image_url, password_hash, staff_only, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+    [String(req.body.name || "").slice(0, 80), String(req.body.description || "").slice(0, 255), imageUrl, passwordHash, staffOnly, req.user.id]
   );
   await pool.query("INSERT IGNORE INTO room_access (room_id, user_id) VALUES (?, ?)", [result.insertId, req.user.id]);
   broadcast("rooms-changed", { id: result.insertId });
@@ -250,6 +253,7 @@ router.post("/rooms", requireAuth, roomUpload.single("image"), async (req, res) 
 router.post("/rooms/:roomId/join", requireAuth, async (req, res) => {
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
+  if (Number(room.staff_only) === 1 && !isStaff(req.user)) return res.status(403).json({ error: "This room is for staff only.", code: "STAFF_ONLY" });
   if (!room.password_hash || isStaff(req.user) || Number(room.created_by) === Number(req.user.id)) {
     await pool.query("INSERT IGNORE INTO room_access (room_id, user_id) VALUES (?, ?)", [room.id, req.user.id]);
     return res.json({ ok: true });
