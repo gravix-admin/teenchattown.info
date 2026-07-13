@@ -1,3 +1,26 @@
+function removeDuplicateDocumentShells() {
+  const singletonIds = ["authScreen", "app", "drawer", "profileModal", "editProfileModal", "userActionModal", "imageLightbox"];
+  singletonIds.forEach((id) => {
+    document.querySelectorAll(`#${id}`).forEach((node, index) => {
+      if (index > 0) node.remove();
+    });
+  });
+  [
+    'link[rel="stylesheet"][href*="/styles.css"]',
+    'script[src*="/socket.io/socket.io.js"]',
+    'script[src*="/script.js"]',
+  ].forEach((selector) => {
+    document.querySelectorAll(selector).forEach((node, index) => {
+      if (index > 0) node.remove();
+    });
+  });
+  document.querySelectorAll("body > meta, body > title, body > link[rel='stylesheet']").forEach((node) => node.remove());
+  document.documentElement.dataset.documentCleaned = "true";
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", removeDuplicateDocumentShells, { once: true });
+else removeDuplicateDocumentShells();
+
 function readLocalCache(key) {
   try { return JSON.parse(localStorage.getItem(key) || "null"); } catch (_error) { return null; }
 }
@@ -26,6 +49,7 @@ const state = {
   selectedUserId: null,
   activePmUserId: null,
   uploadFile: null,
+  uploadPreviewUrl: "",
   pmUploadFile: null,
   sendingMessage: false,
   sendingPm: false,
@@ -479,6 +503,57 @@ function openEmojiPicker(inputSelector, anchor) {
     input.focus();
     picker.remove();
   });
+}
+
+function closeComposerTools() {
+  const menu = $("#composerToolsMenu");
+  const trigger = $("#composerToolsButton");
+  menu?.classList.add("hidden");
+  trigger?.setAttribute("aria-expanded", "false");
+}
+
+function toggleComposerTools() {
+  const menu = $("#composerToolsMenu");
+  const trigger = $("#composerToolsButton");
+  if (!menu || !trigger) return;
+  const opening = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !opening);
+  trigger.setAttribute("aria-expanded", String(opening));
+}
+
+function clearMessageAttachment() {
+  if (state.uploadPreviewUrl) URL.revokeObjectURL(state.uploadPreviewUrl);
+  state.uploadPreviewUrl = "";
+  state.uploadFile = null;
+  const input = $("#messageAttachment");
+  const preview = $("#uploadPreview");
+  if (input) input.value = "";
+  if (preview) {
+    preview.classList.add("hidden");
+    preview.innerHTML = "";
+  }
+}
+
+function selectMessageAttachment(file) {
+  if (!file) return clearMessageAttachment();
+  if (!String(file.type || "").startsWith("image/")) {
+    clearMessageAttachment();
+    toast("Choose an image file.");
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    clearMessageAttachment();
+    toast("Images must be 4 MB or smaller.");
+    return;
+  }
+  if (state.uploadPreviewUrl) URL.revokeObjectURL(state.uploadPreviewUrl);
+  state.uploadFile = file;
+  state.uploadPreviewUrl = URL.createObjectURL(file);
+  const preview = $("#uploadPreview");
+  const size = file.size >= 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+  preview.innerHTML = `<img src="${html(state.uploadPreviewUrl)}" alt="Selected image preview" /><span title="${html(file.name)}">${html(file.name)} · ${size}</span><button id="removeMessageAttachment" type="button" aria-label="Remove selected image">×</button>`;
+  preview.classList.remove("hidden");
+  closeComposerTools();
 }
 
 function openImageZoom(src) {
@@ -3444,7 +3519,8 @@ function bindEvents() {
       return;
     }
     if (!event.target.closest(".message-menu-wrap")) closeMessageMenus();
-    if (!event.target.closest(".emoji-picker") && !event.target.closest("#emojiButton") && !event.target.closest("#pmEmojiButton")) $(".emoji-picker")?.remove();
+    if (!event.target.closest(".emoji-picker") && !event.target.closest("#composerEmojiAction") && !event.target.closest("#pmEmojiButton")) $(".emoji-picker")?.remove();
+    if (!event.target.closest("#composerToolsMenu") && !event.target.closest("#composerToolsButton")) closeComposerTools();
     if (!$("#app")?.classList.contains("right-closed") && !event.target.closest(".right") && !event.target.closest("#rightToggleButton")) {
       $("#app").classList.add("right-closed");
       $("#rightToggleButton")?.setAttribute("aria-expanded", "false");
@@ -3477,6 +3553,7 @@ function bindEvents() {
         await api(`/api/chat/rooms/${state.currentRoomId}/messages`, { method: "DELETE" });
         $("#messageInput").value = "";
         $("#charCount").textContent = "0/1200";
+        clearMessageAttachment();
         toast("Room cleared.");
         return;
       }
@@ -3527,11 +3604,9 @@ function bindEvents() {
         $("#charCount").textContent = "0/1200";
       }
       state.replyToId = null;
-      state.uploadFile = null;
       $("#replyBox").classList.add("hidden");
-      $("#uploadPreview").classList.add("hidden");
       $("#slashSuggestions").classList.add("hidden");
-      $("#messageAttachment").value = "";
+      clearMessageAttachment();
       state.lastSentKey = sendKey;
       state.lastSentAt = Date.now();
     } catch (error) {
@@ -3558,16 +3633,28 @@ function bindEvents() {
     }
   });
   $("#clearReply").addEventListener("click", () => { state.replyToId = null; $("#replyBox").classList.add("hidden"); });
-  $("#emojiButton").addEventListener("click", (event) => openEmojiPicker("#messageInput", event.currentTarget));
-  $("#uploadMessageButton").addEventListener("click", () => $("#messageAttachment").click());
-  $("#messageAttachment").addEventListener("change", () => {
-    state.uploadFile = $("#messageAttachment").files[0];
-    if (state.uploadFile) {
-      $("#uploadPreview").innerHTML = `<span>${html(state.uploadFile.name)}</span>`;
-      $("#uploadPreview").classList.remove("hidden");
-    }
+  $("#composerToolsButton").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleComposerTools();
   });
-  $("#voiceButton").addEventListener("click", () => toast("Voice recording needs HTTPS on the live domain before microphone capture can start."));
+  $("#composerImageAction").addEventListener("click", () => {
+    closeComposerTools();
+    $("#messageAttachment").click();
+  });
+  $("#composerEmojiAction").addEventListener("click", () => {
+    closeComposerTools();
+    openEmojiPicker("#messageInput", $("#composerToolsButton"));
+  });
+  $("#composerVoiceAction").addEventListener("click", () => {
+    closeComposerTools();
+    toast("Voice recording needs HTTPS permission before microphone capture can start.");
+  });
+  $("#messageAttachment").addEventListener("change", () => {
+    selectMessageAttachment($("#messageAttachment").files[0]);
+  });
+  $("#uploadPreview").addEventListener("click", (event) => {
+    if (event.target.closest("#removeMessageAttachment")) clearMessageAttachment();
+  });
   window.addEventListener("resize", syncResponsiveLayout);
   $("#avatarUpload").addEventListener("change", () => {
     const file = $("#avatarUpload").files[0];
