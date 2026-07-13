@@ -3809,3 +3809,102 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .profile-sound-controls { grid-template-columns: 1fr 1fr; }
   .profile-sound-preview { grid-column: 1/-1; }
 }
+
+/* Session views must never appear together. */
+body.session-authenticated {
+  height: 100dvh;
+  overflow: hidden;
+}
+body.session-authenticated .auth-screen,
+body.session-anonymous .app,
+body.session-pending .auth-screen,
+body.session-pending .app {
+  display: none !important;
+}
+
+/* Online users opens below the profile area as a compact popover. */
+.app,
+.app.right-closed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+.app.nav-open,
+.app.nav-open.right-closed {
+  grid-template-columns: 290px minmax(0, 1fr);
+}
+.app .right {
+  position: fixed;
+  top: calc(var(--topbar-height) + 8px);
+  right: 12px;
+  z-index: 64;
+  grid-row: auto;
+  width: min(340px, calc(100vw - 24px));
+  height: auto;
+  max-height: calc(100dvh - var(--topbar-height) - 20px);
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 16px;
+  padding: 12px;
+  opacity: 1;
+  visibility: visible;
+  background: rgba(13,16,24,.98);
+  box-shadow: 0 24px 70px rgba(0,0,0,.48);
+  transform: translateY(0) scale(1);
+  transform-origin: top right;
+  transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+}
+.app .right::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: 26px;
+  width: 12px;
+  height: 12px;
+  border-left: 1px solid rgba(255,255,255,.11);
+  border-top: 1px solid rgba(255,255,255,.11);
+  background: #0d1018;
+  transform: rotate(45deg);
+}
+.app.right-closed .right {
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.11);
+  padding: 12px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-8px) scale(.98);
+}
+.right-panel-head {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  padding-top: 2px;
+  background: rgba(13,16,24,.98);
+}
+
+@media (min-width: 1101px) {
+  .app,
+  .app.right-closed {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+  .app.nav-open,
+  .app.nav-open.right-closed {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1180px) {
+  .app,
+  .app.nav-open,
+  .app.right-closed,
+  .app.nav-open.right-closed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app .right {
+    top: calc(var(--topbar-height) + 7px);
+    right: 8px;
+    width: min(340px, calc(100vw - 16px));
+    height: auto;
+    max-height: calc(100dvh - var(--topbar-height) - 15px);
+  }
+}
