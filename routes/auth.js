@@ -1,8 +1,10 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
 const pool = require("../database");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, cacheUser, invalidateUserCache, isStaff } = require("../middleware/auth");
 const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { calculateAge, publicUser, rankBadges } = require("../services/userService");
 const { broadcast } = require("../services/events");
@@ -24,6 +26,31 @@ const exposedTools = ["postNews", "warn", "mute", "kick", "ban", "deleteAccount"
 const userDirectoryColumns = `id, username, display_name, age, gender, rank_name, avatar_url,
   profile_title, profile_status, show_online_status, mood, xp, gold, diamonds, country,
   frame, last_seen, created_at`;
+const permissionCache = new Map();
+const directoryCache = { rows: null, at: 0 };
+const DIRECTORY_CACHE_MS = 5000;
+const PERMISSION_CACHE_MS = 30000;
+
+async function userDirectory() {
+  if (directoryCache.rows && Date.now() - directoryCache.at < DIRECTORY_CACHE_MS) return directoryCache.rows;
+  const [rows] = await pool.query(
+    `SELECT ${userDirectoryColumns} FROM users
+     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
+     ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','queen','king','s-vip','vip','user'), username`
+  );
+  directoryCache.rows = rows;
+  directoryCache.at = Date.now();
+  return rows;
+}
+
+async function removeUploadedAsset(url, folder) {
+  const value = String(url || "");
+  const prefix = `/uploads/${folder}/`;
+  if (!value.startsWith(prefix)) return;
+  const filename = path.basename(decodeURIComponent(value));
+  const target = path.join(__dirname, "..", "uploads", folder, filename);
+  await fs.promises.unlink(target).catch(() => {});
+}
 
 function sign(user) {
   return jwt.sign({ id: user.id, v: Number(user.token_version || 0) }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -37,9 +64,12 @@ async function hasProfileTool(user, tool) {
 
 async function userPermissions(user) {
   if (user.rank_name === "developer") return Object.fromEntries(exposedTools.map((tool) => [tool, true]));
+  const cached = permissionCache.get(user.rank_name);
+  if (cached && Date.now() - cached.at < PERMISSION_CACHE_MS) return cached.value;
   const [rows] = await pool.query("SELECT tool, allowed FROM role_permissions WHERE rank_name = ? AND tool IN (?)", [user.rank_name, exposedTools]);
   const permissions = Object.fromEntries(exposedTools.map((tool) => [tool, false]));
   for (const row of rows) permissions[row.tool] = Boolean(row.allowed);
+  permissionCache.set(user.rank_name, { value: permissions, at: Date.now() });
   return permissions;
 }
 
@@ -96,36 +126,35 @@ router.post("/logout", requireAuth, async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   if (req.user.rank_name === "s-vip" && req.user.svip_until && new Date(req.user.svip_until) < new Date()) {
     await pool.query("UPDATE users SET rank_name = 'user', svip_until = NULL WHERE id = ?", [req.user.id]);
-    const [[fresh]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.user.id]);
-    req.user = fresh;
+    req.user.rank_name = "user";
+    req.user.svip_until = null;
   }
   if (!req.user.last_online_reward_at || (Date.now() - new Date(req.user.last_online_reward_at).getTime()) >= 10 * 60 * 1000) {
     await pool.query("UPDATE users SET diamonds = diamonds + 3, last_online_reward_at = NOW(), last_seen = NOW() WHERE id = ?", [req.user.id]);
-    const [[fresh]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.user.id]);
-    req.user = fresh;
+    req.user.diamonds = Number(req.user.diamonds || 0) + 3;
+    req.user.last_online_reward_at = new Date();
   } else {
-    await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [req.user.id]);
+    pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [req.user.id]).catch(() => {});
   }
-  const [rooms] = await pool.query(
-    "SELECT id, name, description, image_url, is_pinned, created_by, created_at, IF(password_hash IS NULL OR password_hash = '', 0, 1) AS locked FROM rooms ORDER BY CASE WHEN name = 'Main Room' THEN 0 ELSE 1 END, is_pinned DESC, name"
-  );
-  const [users] = await pool.query(
-    `SELECT ${userDirectoryColumns} FROM users
-     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
-     ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','queen','king','s-vip','vip','user'), username`
-  );
-  const [notifications] = await pool.query("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", [req.user.id]);
-  const [[privateUnread]] = await pool.query(
-    "SELECT COUNT(*) AS count FROM private_messages WHERE receiver_id = ? AND read_at IS NULL AND deleted_at IS NULL",
-    [req.user.id]
-  );
-  const [friendRequests] = await pool.query(
-    `SELECT fr.*, u.username, u.avatar_url, u.rank_name FROM friend_requests fr
-     JOIN users u ON u.id = fr.from_user_id
-     WHERE fr.to_user_id = ? AND fr.status = 'pending'
-     ORDER BY fr.created_at DESC`,
-    [req.user.id]
-  );
+  req.user.last_seen = new Date();
+  cacheUser(req.user);
+  const [roomsResult, users, notificationsResult, privateUnreadResult, friendRequestsResult, badges, permissions] = await Promise.all([
+    pool.query("SELECT id, name, description, image_url, is_pinned, staff_only, created_by, created_at, IF(password_hash IS NULL OR password_hash = '', 0, 1) AS locked FROM rooms WHERE staff_only = 0 OR ? = 1 ORDER BY CASE WHEN name = 'Main Room' THEN 0 ELSE 1 END, is_pinned DESC, name", [isStaff(req.user) ? 1 : 0]),
+    userDirectory(),
+    pool.query("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", [req.user.id]),
+    pool.query("SELECT COUNT(*) AS count FROM private_messages WHERE receiver_id = ? AND read_at IS NULL AND deleted_at IS NULL", [req.user.id]),
+    pool.query(`SELECT fr.*, u.username, u.avatar_url, u.rank_name FROM friend_requests fr
+      JOIN users u ON u.id = fr.from_user_id
+      WHERE fr.to_user_id = ? AND fr.status = 'pending'
+      ORDER BY fr.created_at DESC`, [req.user.id]),
+    rankBadges(),
+    userPermissions(req.user),
+  ]);
+  const rooms = roomsResult[0];
+  const notifications = notificationsResult[0];
+  const privateUnread = privateUnreadResult[0][0];
+  const friendRequests = friendRequestsResult[0];
+  res.set("Cache-Control", "private, no-store");
   res.json({
     me: publicUser(req.user, req.user),
     rooms,
@@ -133,17 +162,14 @@ router.get("/me", requireAuth, async (req, res) => {
     notifications,
     friendRequests,
     unreadPm: Number(privateUnread.count || 0),
-    rankBadges: await rankBadges(),
-    permissions: await userPermissions(req.user),
+    rankBadges: badges,
+    permissions,
   });
 });
 
 router.get("/users", requireAuth, async (req, res) => {
-  const [users] = await pool.query(
-    `SELECT ${userDirectoryColumns} FROM users
-     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
-     ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','queen','king','s-vip','vip','user'), username`
-  );
+  const users = await userDirectory();
+  res.set("Cache-Control", "private, max-age=8, stale-while-revalidate=20");
   res.json({
     me: publicUser(req.user, req.user),
     users: users.map((user) => publicUser(user, req.user)),
@@ -217,9 +243,11 @@ router.patch("/me", requireAuth, async (req, res) => {
       if (isDuplicateKeyError(error)) return res.status(409).json({ error: duplicateKeyMessage(error) });
       throw error;
     }
+    directoryCache.rows = null;
   }
   await pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'profile_ready'", [req.user.id]);
   const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [req.user.id]);
+  cacheUser(rows[0]);
   broadcast("users", { changed: publicUser(rows[0], req.user) });
   res.json({ me: publicUser(rows[0], rows[0]) });
 });
@@ -229,21 +257,52 @@ router.post("/me/password", requireAuth, async (req, res) => {
   if (!(await bcrypt.compare(String(currentPassword || ""), req.user.password_hash))) return res.status(401).json({ error: "Current password is wrong." });
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters." });
   await pool.query("UPDATE users SET password_hash = ? WHERE id = ?", [await bcrypt.hash(newPassword, 10), req.user.id]);
+  invalidateUserCache(req.user.id);
   res.json({ ok: true });
 });
 
 router.post("/me/avatar", requireAuth, avatarUpload.single("avatar"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Choose an avatar image." });
   const url = fileToDataUrl(req.file);
+  const [[current]] = await pool.query("SELECT avatar_url FROM users WHERE id = ?", [req.user.id]);
   await pool.query("UPDATE users SET avatar_url = ? WHERE id = ?", [url, req.user.id]);
+  await removeUploadedAsset(current?.avatar_url, "avatars");
+  invalidateUserCache(req.user.id);
+  directoryCache.rows = null;
+  broadcast("users-changed", { userId: req.user.id });
   res.json({ avatarUrl: url });
+});
+
+router.delete("/me/avatar", requireAuth, async (req, res) => {
+  const [[current]] = await pool.query("SELECT avatar_url, gender FROM users WHERE id = ?", [req.user.id]);
+  const avatarUrl = `/assets/avatar-${["male", "female", "other"].includes(current?.gender) ? current.gender : "other"}.svg`;
+  await pool.query("UPDATE users SET avatar_url = ? WHERE id = ?", [avatarUrl, req.user.id]);
+  await removeUploadedAsset(current?.avatar_url, "avatars");
+  invalidateUserCache(req.user.id);
+  directoryCache.rows = null;
+  broadcast("users-changed", { userId: req.user.id });
+  res.json({ ok: true, avatarUrl });
 });
 
 router.post("/me/banner", requireAuth, bannerUpload.single("banner"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "Choose a banner image." });
   const url = fileToDataUrl(req.file);
+  const [[current]] = await pool.query("SELECT banner_url FROM users WHERE id = ?", [req.user.id]);
   await pool.query("UPDATE users SET banner_url = ? WHERE id = ?", [url, req.user.id]);
+  await removeUploadedAsset(current?.banner_url, "banners");
+  invalidateUserCache(req.user.id);
+  broadcast("users-changed", { userId: req.user.id });
   res.json({ bannerUrl: url });
+});
+
+router.delete("/me/banner", requireAuth, async (req, res) => {
+  const [[current]] = await pool.query("SELECT banner_url FROM users WHERE id = ?", [req.user.id]);
+  const bannerUrl = "/assets/profile-banner.svg";
+  await pool.query("UPDATE users SET banner_url = ? WHERE id = ?", [bannerUrl, req.user.id]);
+  await removeUploadedAsset(current?.banner_url, "banners");
+  invalidateUserCache(req.user.id);
+  broadcast("users-changed", { userId: req.user.id });
+  res.json({ ok: true, bannerUrl });
 });
 
 router.post("/me/delete-request", requireAuth, async (req, res) => {
