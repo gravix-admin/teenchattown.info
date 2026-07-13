@@ -445,15 +445,14 @@ function syncResponsiveLayout() {
   if (!app) return;
   const compact = window.matchMedia("(max-width: 1180px)").matches;
   if (state.compactLayout === compact) return;
+  const firstSync = state.compactLayout === null;
   state.compactLayout = compact;
-  if (compact) {
+  if (compact || firstSync) {
     app.classList.add("right-closed");
     $("#rightToggleButton")?.setAttribute("aria-expanded", "false");
     app.classList.remove("nav-open");
     return;
   }
-  app.classList.remove("right-closed");
-  $("#rightToggleButton")?.setAttribute("aria-expanded", "true");
   app.classList.remove("nav-open");
 }
 
@@ -506,6 +505,15 @@ function stopProfileMusic() {
   audio.load();
 }
 
+function setSessionView(mode) {
+  const body = document.body;
+  body.classList.toggle("session-authenticated", mode === "authenticated");
+  body.classList.toggle("session-anonymous", mode === "anonymous");
+  body.classList.toggle("session-pending", mode === "pending");
+  $("#authScreen")?.classList.toggle("hidden", mode !== "anonymous");
+  $("#app")?.classList.toggle("hidden", mode !== "authenticated");
+}
+
 async function bootstrap() {
   if (state.bootstrapPromise) return state.bootstrapPromise;
   state.bootstrapPromise = (async () => {
@@ -534,8 +542,7 @@ async function bootstrap() {
       : state.rooms[0]?.id;
     if (state.currentRoomId) localStorage.setItem("tct_current_room_id", String(state.currentRoomId));
     document.documentElement.classList.remove("returning-user");
-    $("#authScreen").classList.add("hidden");
-    $("#app").classList.remove("hidden");
+    setSessionView("authenticated");
     syncResponsiveLayout();
     $("#topName").textContent = displayName(state.me);
     $("#topAvatar").src = avatar(state.me);
@@ -3249,8 +3256,7 @@ function handleAuthFailure(_error) {
   localStorage.removeItem("tct_token");
   state.token = "";
   document.documentElement.classList.remove("returning-user");
-  $("#app").classList.add("hidden");
-  $("#authScreen").classList.remove("hidden");
+  setSessionView("anonymous");
 }
 
 async function logout() {
@@ -3327,6 +3333,7 @@ function bindEvents() {
       const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
       state.token = data.token;
       localStorage.setItem("tct_token", state.token);
+      setSessionView("pending");
       await bootstrap();
     } catch (error) {
       $("#authMessage").textContent = error.message;
@@ -3347,6 +3354,7 @@ function bindEvents() {
       const data = await api("/api/auth/register", { method: "POST", body: JSON.stringify(payload) });
       state.token = data.token;
       localStorage.setItem("tct_token", state.token);
+      setSessionView("pending");
       await bootstrap();
     } catch (error) {
       $("#authMessage").textContent = error.message;
@@ -3390,14 +3398,21 @@ function bindEvents() {
     const opening = app.classList.contains("right-closed");
     app.classList.toggle("right-closed", !opening);
     $("#rightToggleButton").setAttribute("aria-expanded", String(opening));
-    if (opening) renderUsers();
+    if (opening) {
+      $("#drawer")?.classList.add("hidden");
+      renderUsers();
+    }
   });
   $("#closeRightPanel").addEventListener("click", () => {
     $("#app").classList.add("right-closed");
     $("#rightToggleButton").setAttribute("aria-expanded", "false");
   });
   $("#refreshButton").addEventListener("click", () => manualRefresh());
-  $("#profileButton").addEventListener("click", openOwnMenu);
+  $("#profileButton").addEventListener("click", () => {
+    $("#app").classList.add("right-closed");
+    $("#rightToggleButton").setAttribute("aria-expanded", "false");
+    openOwnMenu();
+  });
   $("#pmIcon").addEventListener("click", () => openPmConversations());
   $("#friendIcon").addEventListener("click", () => openFriendRequestDrawer());
   $("#notificationIcon").addEventListener("click", async () => {
@@ -3430,6 +3445,10 @@ function bindEvents() {
     }
     if (!event.target.closest(".message-menu-wrap")) closeMessageMenus();
     if (!event.target.closest(".emoji-picker") && !event.target.closest("#emojiButton") && !event.target.closest("#pmEmojiButton")) $(".emoji-picker")?.remove();
+    if (!$("#app")?.classList.contains("right-closed") && !event.target.closest(".right") && !event.target.closest("#rightToggleButton")) {
+      $("#app").classList.add("right-closed");
+      $("#rightToggleButton")?.setAttribute("aria-expanded", "false");
+    }
     const drawer = $("#drawer");
     const drawerTrigger = event.target.closest("#profileButton, #pmIcon, #friendIcon, #notificationIcon, #reportFlagIcon, #roomSwitchButton, #pmSettingsButton, #pmExpandButton, [data-user-id], [data-open-user-menu], [data-open-profile-actions], [data-user-action-panel], [data-pm-user], [data-pm-open], [data-pm-start], [data-own-action], [data-view-profile], [data-report-chat], [data-delete-pm-chat]");
     if (drawer && !drawer.classList.contains("hidden") && !event.target.closest("#drawer") && !drawerTrigger) {
@@ -3660,13 +3679,13 @@ applyTheme(localStorage.getItem("tct_theme") || "dark");
 setupDobSelects();
 bindEvents();
 if (state.token) {
-  $("#authScreen")?.classList.add("hidden");
+  setSessionView("pending");
   bootstrap().catch((error) => {
     if (error.status === 401 || error.status === 403) handleAuthFailure(error);
     else {
-      $("#app")?.classList.remove("hidden");
       toast("Connection is waking up. Tap refresh if the room stays empty.");
     }
   });
+} else {
+  setSessionView("anonymous");
 }
-
