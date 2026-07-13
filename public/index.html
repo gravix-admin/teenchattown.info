@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260713-attachments" />
   </head>
   <body>
     <section class="auth-screen" id="authScreen">
@@ -107,12 +107,24 @@
             <form class="composer" id="messageForm">
               <div class="reply-box hidden" id="replyBox"><span></span><button type="button" id="clearReply">x</button></div>
               <input id="messageAttachment" class="hidden" type="file" accept="image/*" />
+              <div class="composer-tools-menu hidden" id="composerToolsMenu" role="menu" aria-label="Add to message">
+                <button id="composerImageAction" type="button" role="menuitem">
+                  <span class="composer-tool-mark" aria-hidden="true">&#128206;</span>
+                  <span><strong>Photo or image</strong><small>Upload an image up to 4 MB</small></span>
+                </button>
+                <button id="composerEmojiAction" type="button" role="menuitem">
+                  <span class="composer-tool-mark" aria-hidden="true">&#9786;</span>
+                  <span><strong>Emoji</strong><small>Add a reaction to your message</small></span>
+                </button>
+                <button id="composerVoiceAction" type="button" role="menuitem">
+                  <span class="composer-tool-mark composer-tool-mic" aria-hidden="true"></span>
+                  <span><strong>Voice message</strong><small>Record from a secure connection</small></span>
+                </button>
+              </div>
               <div class="composer-input">
-                <button class="composer-icon" id="emojiButton" type="button" title="Emoji"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM8 9.5a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm8 0a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm-4 7.2c-2.2 0-4-1.2-5-3h10c-1 1.8-2.8 3-5 3Z"/></svg></button>
+                <button class="composer-icon composer-plus" id="composerToolsButton" type="button" title="Add to message" aria-label="Add to message" aria-expanded="false" aria-controls="composerToolsMenu">+</button>
                 <input id="messageInput" maxlength="1200" placeholder="Type here.." autocomplete="off" autocorrect="off" spellcheck="false" />
                 <span id="charCount" class="hidden">0/1200</span>
-                <button class="composer-icon" id="uploadMessageButton" type="button" title="Upload image"><svg viewBox="0 0 24 24"><path d="M5 5h3l1.5-2h5L16 5h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Zm7 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6Z"/></svg></button>
-                <button class="composer-icon" id="voiceButton" type="button" title="Voice"><svg viewBox="0 0 24 24"><path d="M12 14a4 4 0 0 0 4-4V6a4 4 0 1 0-8 0v4a4 4 0 0 0 4 4Zm7-4h-2a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-4.08A7 7 0 0 0 19 10Z"/></svg></button>
                 <button class="send icon-send" type="submit" title="Send"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l13 2-13 2z"/></svg></button>
               </div>
               <div class="slash-suggestions hidden" id="slashSuggestions"></div>
@@ -277,288 +289,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js"></script>
-  </body>
-</html>
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TeenChatTown — Live rooms, real friends</title>
-    <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
-    <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <section class="auth-screen" id="authScreen">
-      <div class="auth-hero">
-        <div class="brand"><span>TT</span><strong>Teens Town Chat</strong></div>
-        <div class="auth-copy">
-          <span class="eyebrow">Your people are already here</span>
-          <h1>Chat loud. Belong instantly.</h1>
-          <p>Drop into live rooms, build a profile that feels like you, and keep up with friends without the clutter.</p>
-        </div>
-        <div class="auth-highlights">
-          <span>Live rooms</span>
-          <span>Profile music</span>
-          <span>Friends wall</span>
-          <span>Safety first</span>
-        </div>
-      </div>
-      <div class="auth-card">
-        <div class="auth-card-heading">
-          <span class="eyebrow">New here?</span>
-          <h2>Step into town</h2>
-        </div>
-        <div class="auth-tabs">
-          <button class="active" data-auth-tab="login" type="button">Login</button>
-          <button data-auth-tab="register" type="button">Register</button>
-        </div>
-        <form class="auth-form active" id="loginForm">
-          <h3>Enter chat</h3>
-          <input name="identity" placeholder="Username or email" autocomplete="username" required />
-          <input name="password" type="password" placeholder="Password" autocomplete="current-password" required />
-          <button class="primary" type="submit">Enter Chat</button>
-        </form>
-        <form class="auth-form" id="registerForm">
-          <h3>Create account</h3>
-          <input name="username" placeholder="Username" minlength="3" maxlength="18" required />
-          <input name="email" type="email" placeholder="Email" required />
-          <input name="password" type="password" placeholder="Password" minlength="6" required />
-          <label class="field-label">Date of birth
-            <span class="dob-selects" id="dobSelects">
-              <select id="dobDay" name="dobDay" aria-label="Day" required></select>
-              <select id="dobMonth" name="dobMonth" aria-label="Month" required></select>
-              <select id="dobYear" name="dobYear" aria-label="Year" required></select>
-            </span>
-            <input id="dobInput" name="dob" type="hidden" />
-          </label>
-          <div class="gender-row">
-            <label><input type="radio" name="gender" value="male" checked /> Male</label>
-            <label><input type="radio" name="gender" value="female" /> Female</label>
-            <label><input type="radio" name="gender" value="other" /> Other</label>
-          </div>
-          <button class="primary" type="submit">Register</button>
-        </form>
-        <p class="auth-note">For ages 13+. Be kind, protect private info, and use reports when something feels off.</p>
-        <p id="authMessage"></p>
-      </div>
-    </section>
-
-    <section class="app right-closed hidden" id="app">
-      <header class="topbar">
-        <button class="menu-toggle" id="menuButton" title="Menu" type="button"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-        <div class="brand small"><span>TT</span><strong>Teens Town Chat</strong></div>
-        <nav class="top-icons" aria-label="Top actions">
-          <button id="refreshButton" title="Refresh" type="button"><svg viewBox="0 0 24 24"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h8V3z"/></svg></button>
-          <button id="pmIcon" title="Private messages" type="button"><svg viewBox="0 0 24 24"><path d="M3 5h18v12H8l-5 4z"/></svg><em id="pmBadge" class="hidden"></em></button>
-          <button id="friendIcon" title="Friend requests" type="button"><svg viewBox="0 0 24 24"><path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5zm8-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg><em id="friendBadge" class="hidden"></em></button>
-          <button id="notificationIcon" title="Notifications" type="button"><svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.4-2h-4.8A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3a2 2 0 1 0-4 0v1.3A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg><em id="notificationBadge" class="hidden"></em></button>
-          <button id="reportFlagIcon" class="staff-only hidden" title="Reports" type="button"><svg viewBox="0 0 24 24"><path d="M5 21V4h10l1 2h4v10h-8l-1-2H7v7z"/></svg><em id="reportBadge" class="hidden"></em></button>
-          <button id="rightToggleButton" class="online-users-button" title="Online users" aria-label="Show online users" aria-expanded="false" type="button"><svg viewBox="0 0 24 24"><path d="M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm10 1a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM7 13c-4 0-6 2.2-6 5v1h12v-1c0-2.8-2-5-6-5Zm10 .5c-1.1 0-2.1.2-2.9.6 1.2 1 1.9 2.4 1.9 3.9v1h7v-1c0-2.5-2-4.5-6-4.5Z"/></svg><em id="onlineCountBadge" class="online-count">0</em></button>
-          <button id="profileButton" class="profile-button" type="button"><img id="topAvatar" alt="" /><span id="topName"></span></button>
-        </nav>
-      </header>
-
-      <aside class="left">
-        <nav class="side-nav">
-          <p class="nav-kicker">Discover</p>
-          <button data-view="rooms" title="Rooms" aria-label="Rooms" type="button"><span class="nav-mark">R</span><span>Rooms</span></button>
-          <button data-view="wall" title="Friends Wall" aria-label="Friends Wall" type="button"><span class="nav-mark">W</span><span>Friends Wall</span></button>
-          <button data-view="news" class="nav-news-button" title="News" aria-label="News" type="button"><span class="nav-mark">N</span><span>News</span><i id="newsBadge" class="menu-dot hidden" aria-hidden="true"></i></button>
-          <button data-view="leaderboard" title="Leaderboard" aria-label="Leaderboard" type="button"><span class="nav-mark">L</span><span>Leaderboard</span></button>
-          <button data-view="tournament" title="Tournament" aria-label="Tournament" type="button"><span class="nav-mark">T</span><span>Tournament</span></button>
-          <button data-view="chatStore" title="Chat Store" aria-label="Chat Store" type="button"><span class="nav-mark">S</span><span>Chat Store</span></button>
-          <p class="nav-kicker">Community</p>
-          <button data-view="rules" title="Rules" aria-label="Rules" type="button"><span class="nav-mark">!</span><span>Rules</span></button>
-          <button data-view="commands" title="Commands" aria-label="Commands" type="button"><span class="nav-mark">/</span><span>Commands</span></button>
-          <button data-view="vip" title="Buy S-VIP" aria-label="Buy S-VIP" type="button"><span class="nav-mark">V</span><span>Buy S-VIP</span></button>
-        </nav>
-      </aside>
-
-      <main class="main">
-        <section class="view active" id="chatView">
-          <div class="chat-shell">
-            <div class="chat-head">
-              <div><h2 id="roomTitle">Main Room</h2><p id="roomDescription" class="hidden">Central room</p></div>
-              <div class="chat-head-actions"><button id="pinnedButton" type="button">Pinned</button><button id="pollButton" type="button">Poll</button></div>
-            </div>
-            <div class="messages" id="messages"></div>
-            <div class="typing" id="typingText">No one is typing</div>
-            <form class="composer" id="messageForm">
-              <div class="reply-box hidden" id="replyBox"><span></span><button type="button" id="clearReply">x</button></div>
-              <input id="messageAttachment" class="hidden" type="file" accept="image/*" />
-              <div class="composer-input">
-                <button class="composer-icon" id="emojiButton" type="button" title="Emoji"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM8 9.5a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm8 0a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm-4 7.2c-2.2 0-4-1.2-5-3h10c-1 1.8-2.8 3-5 3Z"/></svg></button>
-                <input id="messageInput" maxlength="1200" placeholder="Type here.." autocomplete="off" autocorrect="off" spellcheck="false" />
-                <span id="charCount" class="hidden">0/1200</span>
-                <button class="composer-icon" id="uploadMessageButton" type="button" title="Upload image"><svg viewBox="0 0 24 24"><path d="M5 5h3l1.5-2h5L16 5h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Zm7 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6Z"/></svg></button>
-                <button class="composer-icon" id="voiceButton" type="button" title="Voice"><svg viewBox="0 0 24 24"><path d="M12 14a4 4 0 0 0 4-4V6a4 4 0 1 0-8 0v4a4 4 0 0 0 4 4Zm7-4h-2a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-4.08A7 7 0 0 0 19 10Z"/></svg></button>
-                <button class="send icon-send" type="submit" title="Send"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l13 2-13 2z"/></svg></button>
-              </div>
-              <div class="slash-suggestions hidden" id="slashSuggestions"></div>
-              <div class="upload-preview hidden" id="uploadPreview"></div>
-            </form>
-          </div>
-        </section>
-
-        <section class="view" id="friendsView">
-          <div class="panel-grid">
-            <article class="panel"><h2>Friend requests</h2><div id="friendRequests"></div></article>
-            <article class="panel"><h2>Friends</h2><div id="friendsList"></div></article>
-            <article class="panel"><h2>Blocked users</h2><div id="blockList"></div></article>
-          </div>
-        </section>
-
-        <section class="view" id="roomsView"><div class="panel rooms-panel"><div class="room-gallery-hero"><div><span class="eyebrow">Find your vibe</span><h2>Room gallery</h2><p>Open conversations, community spaces, and protected staff rooms—without the maze.</p></div><label class="room-search"><span>Search rooms</span><input id="roomSearch" type="search" placeholder="Music, games, support..." autocomplete="off" /></label></div><div class="room-gallery-toolbar"><span id="roomGalleryCount">0 rooms</span><button data-close-view type="button">Back to chat</button></div><div class="room-grid" id="roomGrid"></div></div></section>
-        <section class="view" id="wallView"><div class="panel wall-hub"><div class="wall-hub-hero"><div><span class="eyebrow">Your circle</span><h2>Friends Wall</h2><p>Short updates from you and the people you have added. Fresh posts load only when you open this space.</p></div><button id="wallRefresh" type="button">Refresh</button></div><form id="friendsWallForm" class="friends-wall-composer"><img id="wallComposerAvatar" alt="" /><input name="body" maxlength="500" placeholder="Share something with your friends..." /><button class="primary" type="submit">Post update</button></form><div class="friends-wall-feed" id="friendsWallFeed"><div class="wall-feed-loading">Opening your wall...</div></div></div></section>
-        <section class="view" id="profilesView"><div class="panel"><h2>Profiles</h2><div class="profile-grid" id="profileGrid"></div></div></section>
-        <section class="view" id="newsView"><div class="panel news-panel"><div class="view-head"><h2>Town News <span id="newsTitleDot" class="inline-news-dot hidden" aria-hidden="true"></span></h2><div class="view-head-actions"><button id="newsComposeButton" class="news-add-button hidden" title="Post news" aria-label="Post news" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button data-close-view type="button">Close</button></div></div><div id="newsComposerArea" class="news-compose-area hidden"></div><div id="newsList"></div></div></section>
-        <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
-        <section class="view" id="tournamentView"><div class="panel"><div class="view-head"><h2>Tournament</h2><button data-close-view type="button">Close</button></div><div class="empty-state"><strong>Tournament hub</strong><p class="muted">Tournament details will be added here later.</p></div></div></section>
-        <section class="view" id="chatStoreView"><div class="panel store-panel"><div class="view-head"><div><h2>Chat Store</h2><small class="store-free-note">Free for Premium</small></div><button data-close-view type="button">Close</button></div><div id="chatStore"><div class="store-loading">Opening store...</div></div></div></section>
-        <section class="view" id="rulesView"><div class="panel policy-panel"><div class="view-head"><h2>TeenChatTown Chat Rules</h2><button data-close-view type="button">Close</button></div><p class="policy-intro">TeenChatTown is a community for respectful, safe, and enjoyable conversations. By using the platform, you agree to follow these rules.</p><div class="rules-list">
-          <article><span>1</span><div><h3>Respect Everyone</h3><p>Treat all users with respect. Harassment, bullying, personal attacks, threats, discrimination, or hate speech are not allowed.</p></div></article>
-          <article><span>2</span><div><h3>Keep the Chat Appropriate</h3><p>Do not post sexual, graphic, violent, or disturbing content. Any sexual content involving minors will result in an immediate permanent ban and may be reported.</p></div></article>
-          <article><span>3</span><div><h3>Protect Personal Information</h3><p>Do not share your address, phone number, passwords, financial information, private photographs, or other sensitive details. Do not expose another user’s private information without permission.</p></div></article>
-          <article><span>4</span><div><h3>No Predatory or Suspicious Behaviour</h3><p>Grooming, sexual requests, manipulation, stalking, blackmail, or attempts to exploit another user are strictly prohibited. Report suspicious behaviour immediately.</p></div></article>
-          <article><span>5</span><div><h3>No Spam or Disruption</h3><p>Do not flood the chat, repeatedly send the same message, abuse capital letters, post excessive links, advertise without permission, or deliberately disturb conversations.</p></div></article>
-          <article><span>6</span><div><h3>No Impersonation</h3><p>Do not pretend to be another user, staff member, celebrity, organisation, or official representative. Misleading usernames and profiles may be removed.</p></div></article>
-          <article><span>7</span><div><h3>Follow Staff Instructions</h3><p>Moderators and administrators may warn, mute, kick, restrict, or ban users who violate the rules. Do not argue about moderation actions in public rooms. Use the official support or appeal system instead.</p></div></article>
-          <article><span>8</span><div><h3>Do Not Evade Punishments</h3><p>Creating alternate accounts or using technical methods to bypass a mute, ban, restriction, or account suspension is prohibited and may result in a permanent ban.</p></div></article>
-          <article><span>9</span><div><h3>Report Problems Responsibly</h3><p>Use the report feature for rule violations, harmful content, suspicious users, or security issues. False reports and misuse of the reporting system may lead to action against your account.</p></div></article>
-          <article><span>10</span><div><h3>Community Safety</h3><p>Any behaviour that harms users, disrupts the community, or misuses the platform may result in moderation action, even if it is not specifically listed above.</p></div></article>
-        </div><section class="enforcement-card"><h3>Enforcement</h3><p>Rule violations may result in a warning, message removal, mute, kick, temporary suspension, account restriction, or permanent ban depending on severity and previous behaviour.</p><p>Serious safety concerns may be reported to the appropriate authorities.</p><strong>By continuing to use TeenChatTown, you confirm that you understand and agree to follow these rules.</strong></section></div></section>
-        <section class="view" id="commandsView"><div class="panel policy-panel"><div class="view-head"><h2>Commands</h2><button data-close-view type="button">Close</button></div><div class="command-directory"><article><span>1</span><div><h3><code>/bet</code></h3><p>Use: <code>/bet "gold amount"</code></p><small>Wait 3 minutes before using the bet command again.</small></div></article></div></div></section>
-        <section class="view" id="vipView"><div class="panel"><div class="view-head"><h2>Buy S-VIP</h2><button data-close-view type="button">Close</button></div><div class="vip-grid" id="vipGrid"></div></div></section>
-        <section class="view" id="adminView"><div class="admin-dashboard" id="adminDashboard"></div></section>
-      </main>
-
-      <aside class="right">
-        <div class="right-panel-head">
-          <div class="right-tabs">
-            <button class="active" data-user-tab="all" title="All users" type="button"><svg viewBox="0 0 24 24"><path d="M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm10 1a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM7 13c-4 0-6 2.2-6 5v1h12v-1c0-2.8-2-5-6-5Zm10 .5c-1.1 0-2.1.2-2.9.6 1.2 1 1.9 2.4 1.9 3.9v1h7v-1c0-2.5-2-4.5-6-4.5Z"/></svg></button>
-            <button data-user-tab="friends" title="Friends" type="button"><svg viewBox="0 0 24 24"><path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5Zm8-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg></button>
-            <button data-user-tab="staff" title="Staff" type="button"><svg viewBox="0 0 24 24"><path d="M12 2 20 6v6c0 5-3.4 9.4-8 10-4.6-.6-8-5-8-10V6l8-4Zm-1 6v4H7l6 6v-4h4z"/></svg></button>
-          </div>
-          <button id="closeRightPanel" class="panel-close-button" title="Close users" type="button"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
-        </div>
-        <div id="userList"></div>
-      </aside>
-    </section>
-
-    <div class="drawer hidden" id="drawer"><div class="drawer-head"><h2 id="drawerTitle"></h2><div class="drawer-actions" id="drawerActions"></div><button id="closeDrawer" class="panel-close-button" title="Close" type="button"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div id="drawerBody"></div></div>
-
-    <dialog class="modal profile-modal" id="profileModal">
-      <button class="modal-close" data-close-modal type="button">x</button>
-      <div class="profile-shell">
-        <div class="profile-cover" id="profileCover">
-          <div class="profile-counter-row" id="profileCounters"></div>
-          <div class="profile-corner-actions" id="profileCornerActions"></div>
-          <div class="profile-avatar-wrap">
-            <img id="profileAvatar" alt="" />
-            <span class="profile-frame-overlay" id="profileFrameOverlay" aria-hidden="true"></span>
-            <span class="profile-status-dot" id="profileStatusDot"></span>
-          </div>
-          <h2 id="profileName"></h2>
-          <p id="profileHandle"></p>
-          <div id="profileRankLine"></div>
-          <p class="profile-quote" id="profileQuote"></p>
-          <div class="profile-main-actions" id="profileMainActions"></div>
-        </div>
-        <div class="profile-tabs">
-          <button class="active" data-profile-tab="info">Overview</button>
-          <button data-profile-tab="wall">Wall</button>
-          <button data-profile-tab="gallery">Gallery</button>
-          <button data-profile-tab="more">More</button>
-        </div>
-        <div class="profile-tab active" id="profileInfo"></div>
-        <div class="profile-tab" id="profileWall"></div>
-        <div class="profile-tab" id="profileGallery"></div>
-        <div class="profile-tab" id="profileMore"></div>
-      </div>
-      <div class="profile-action-overlay hidden" id="profileActionOverlay" aria-hidden="true"></div>
-    </dialog>
-
-    <dialog class="modal edit-profile-modal" id="editProfileModal">
-      <button class="modal-close" data-close-modal type="button">x</button>
-      <div class="edit-profile-head">
-        <button class="edit-back" data-close-modal type="button"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg></button>
-        <strong>Edit Profile</strong>
-        <button class="primary" form="editProfileForm" type="submit">Save</button>
-      </div>
-      <form id="editProfileForm" class="stack-form">
-        <div class="edit-banner-preview" id="editBannerPreview">
-          <div class="edit-cover-actions"><label class="edit-upload-pill">Upload cover<input id="bannerUpload" type="file" accept="image/*" /></label><button class="edit-remove-media" id="removeBannerButton" type="button">Remove cover</button></div>
-          <div class="edit-avatar-preview">
-            <img id="editAvatarPreview" alt="" />
-            <div class="edit-avatar-actions"><label class="edit-upload-pill small">Upload photo<input id="avatarUpload" type="file" accept="image/*" /></label><button class="edit-remove-media small" id="removeAvatarButton" type="button">Remove</button></div>
-          </div>
-        </div>
-        <section class="edit-profile-card edit-identity-card">
-          <div class="edit-section-heading"><strong>Profile identity</strong><small>How people see you around town</small></div>
-          <div class="edit-name-grid">
-            <label><span>Display name</span><input name="displayName" placeholder="Name shown in chat" /></label>
-            <label><span>Username</span><input name="username" placeholder="Your unique @username" /><small>Username changes require VIP or higher.</small></label>
-          </div>
-          <label><span>Bio</span><span class="bio-count" id="bioCount">0/120</span><textarea name="bio" placeholder="Say something short about yourself" maxlength="120"></textarea></label>
-        </section>
-        <section class="edit-profile-card edit-access-card">
-          <div class="edit-section-heading"><strong>Account details</strong><small>Permission-based options appear automatically</small></div>
-          <div class="edit-field-grid compact-fields">
-            <label data-title-field><span>Role / title</span><input name="profileTitle" placeholder="Custom title" /></label>
-            <label><span>Level</span><input name="level" readonly /></label>
-            <label data-status-field><span>Status</span><select name="profileStatus"><option>Online</option><option>Invisible</option></select></label>
-          </div>
-        </section>
-        <section class="profile-settings-card">
-          <button class="settings-collapse" type="button"><strong>Profile Settings</strong><span>^</span></button>
-          <label>Theme Accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" type="button"></button><button data-accent="#a855f7" type="button"></button><button data-accent="#0ea5e9" type="button"></button><button data-accent="#22c55e" type="button"></button><button data-accent="#f97316" type="button"></button></span></label>
-          <label class="toggle-row">Show Online Status<input name="showOnlineStatus" type="checkbox" checked /></label>
-        </section>
-        <section class="edit-profile-card profile-sound-card">
-          <div class="edit-section-heading"><strong>Profile soundtrack</strong><small>MP3, up to 10 MB. Playback stops the moment your profile closes.</small></div>
-          <div class="profile-sound-controls">
-            <div class="profile-sound-preview" id="profileSoundPreview"><span>No track added</span></div>
-            <label class="edit-upload-pill">Choose MP3<input id="profileMusicUpload" type="file" accept="audio/mpeg,.mp3" /></label>
-            <button class="edit-remove-media" id="removeProfileMusicButton" type="button">Remove track</button>
-          </div>
-        </section>
-        <details class="advanced-edit">
-          <summary>More profile options</summary>
-          <label>About Me<textarea name="aboutMe" placeholder="About me"></textarea></label>
-          <div class="edit-field-grid">
-            <label>Mood<input name="mood" placeholder="Mood" /></label>
-          </div>
-          <div class="edit-field-grid">
-            <label>Username color<input name="usernameColor" placeholder="#f87171" /></label>
-            <label>Text color<input name="textColor" placeholder="#fbf7ff" /></label>
-          </div>
-          <div class="edit-field-grid">
-            <label>Theme<select name="theme"><option>dark</option><option>glass</option><option>neon</option><option>cyberpunk</option><option>premium</option></select></label>
-            <label>Bubble<select name="bubbleStyle"><option value="default">Default bubble</option><option value="vip">VIP bubble</option><option value="premium">Premium bubble</option></select></label>
-          </div>
-        </details>
-      </form>
-      <div class="edit-account-actions">
-        <button id="changePasswordButton" type="button">Change password</button>
-        <button id="deleteRequestButton" type="button">Schedule account deletion</button>
-        <button id="cancelDeleteButton" type="button">Cancel deletion</button>
-      </div>
-    </dialog>
-
-    <dialog class="modal" id="userActionModal">
-      <button class="modal-close" data-close-modal type="button">x</button>
-      <div id="userActionBody"></div>
-    </dialog>
-
-    <dialog class="image-lightbox" id="imageLightbox" aria-label="Image preview">
-      <button class="image-lightbox-close" data-close-lightbox type="button">x</button>
-      <img id="imageLightboxImage" alt="" />
-    </dialog>
-
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js"></script>
+    <script src="/script.js?v=20260713-attachments"></script>
   </body>
 </html>
