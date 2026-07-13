@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js"
+    "check": "node --check server.js && node --check routes/auth.js && node --check routes/chat.js && node --check routes/social.js && node --check routes/admin.js && node --check public/script.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
