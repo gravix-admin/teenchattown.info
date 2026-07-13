@@ -51,6 +51,10 @@ const state = {
   newsCacheAt: Number(persistedNews?.at || 0),
   leaderboardCache: persistedLeaderboards || {},
   profileCache: new Map(),
+  profileSocialCache: new Map(),
+  activeProfileUserId: null,
+  friendsWallCache: null,
+  friendsWallCacheAt: 0,
   storeCache: persistedStore?.data || null,
   storeCacheAt: Number(persistedStore?.at || 0),
   framePickerOpen: false,
@@ -59,6 +63,7 @@ const state = {
   profileRequestId: 0,
   socket: null,
   eventSource: null,
+  pmUnreadCacheAt: 0,
   inflightGets: new Map(),
   userActionsBound: false,
 };
@@ -205,7 +210,7 @@ function profileFrame(user) {
 function framedAvatar(user, imageClass = "avatar", extra = "") {
   const frame = profileFrame(user);
   const style = frame ? ` style="--avatar-frame:url('${profileFrameAssets[frame]}')"` : "";
-  return `<span class="avatar-frame ${frame ? "has-frame" : ""}"${style}><img class="${html(imageClass)}" src="${html(avatar(user))}" alt="" ${extra} /></span>`;
+  return `<span class="avatar-frame ${frame ? "has-frame" : ""}"${style}><img class="${html(imageClass)}" src="${html(avatar(user))}" alt="" loading="lazy" decoding="async" ${extra} /></span>`;
 }
 
 function usernameKey(user) {
@@ -311,6 +316,7 @@ function setView(view) {
   $(`#${view}View`)?.classList.add("active");
   $$(".side-nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
   if (view === "rooms") renderRoomGrid();
+  if (view === "wall") renderFriendsWall().catch((error) => toast(error.message));
   if (view === "news") {
     clearNewsUnread();
     renderNews().catch((error) => toast(error.message));
@@ -480,6 +486,14 @@ function closeImageZoom() {
   image.removeAttribute("src");
 }
 
+function stopProfileMusic() {
+  const audio = $("#activeProfileMusic");
+  if (!audio) return;
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+}
+
 async function bootstrap() {
   if (state.bootstrapPromise) return state.bootstrapPromise;
   state.bootstrapPromise = (async () => {
@@ -502,6 +516,7 @@ async function bootstrap() {
     state.rankBadges = data.rankBadges || {};
     state.permissions = data.permissions || {};
     state.unreadPm = Number(data.unreadPm || 0);
+    state.pmUnreadCacheAt = Date.now();
     state.currentRoomId = state.rooms.some((room) => Number(room.id) === Number(previousRoomId))
       ? previousRoomId
       : state.rooms[0]?.id;
@@ -512,6 +527,7 @@ async function bootstrap() {
     syncResponsiveLayout();
     $("#topName").textContent = displayName(state.me);
     $("#topAvatar").src = avatar(state.me);
+    if ($("#wallComposerAvatar")) $("#wallComposerAvatar").src = avatar(state.me);
     $("#reportFlagIcon").classList.toggle("hidden", !staffRanks.has(state.me.rank));
     setBadges();
     syncNewsComposerAccess();
@@ -564,14 +580,18 @@ function renderRooms() {
 function renderRoomGrid() {
   const grid = $("#roomGrid");
   if (!grid) return;
-  grid.innerHTML = state.rooms.map((room) => `
-    <button class="room-card ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""}" data-room-card="${room.id}" type="button">
-      <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" />
-      <span>${roomLocked(room) ? "Locked" : "Open"}</span>
+  const query = String($("#roomSearch")?.value || "").trim().toLowerCase();
+  const visibleRooms = state.rooms.filter((room) => !query || `${room.name || ""} ${room.description || ""}`.toLowerCase().includes(query));
+  $("#roomGalleryCount") && ($("#roomGalleryCount").textContent = `${visibleRooms.length} ${visibleRooms.length === 1 ? "room" : "rooms"}`);
+  grid.innerHTML = visibleRooms.map((room) => `
+    <button class="room-card ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""} ${Number(room.staff_only) === 1 ? "staff-room" : ""}" data-room-card="${room.id}" type="button">
+      <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" loading="lazy" decoding="async" />
+      <span>${Number(room.staff_only) === 1 ? "Staff only" : roomLocked(room) ? "Locked" : "Open now"}</span>
       <strong>${html(room.name)}</strong>
       <small>${html(room.description)}</small>
+      <em>${Number(room.id) === Number(state.currentRoomId) ? "You are here" : "Enter room"}</em>
     </button>
-  `).join("");
+  `).join("") || '<div class="empty-state room-empty"><strong>No matching rooms</strong><p class="muted">Try a different search.</p></div>';
   $$("[data-room-card]").forEach((button) => button.addEventListener("click", async () => switchRoom(button.dataset.roomCard)));
 }
 
@@ -581,9 +601,9 @@ function openRoomSwitcher() {
     <div class="room-switch-list">
       ${state.rooms.map((room) => `
         <button class="room-choice ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""}" data-switch-room="${room.id}" type="button">
-          <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" />
+          <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" loading="lazy" decoding="async" />
           <span><strong>${html(room.name)}</strong><small>${html(room.description)}</small></span>
-          <em>${roomLocked(room) ? "Locked" : "Open"}</em>
+          <em>${Number(room.staff_only) === 1 ? "Staff" : roomLocked(room) ? "Locked" : "Open"}</em>
         </button>
       `).join("")}
     </div>
@@ -1369,6 +1389,7 @@ async function loadFriends() {
 async function refreshPmUnread() {
   const data = await api("/api/chat/private-unread-count");
   state.unreadPm = Number(data.count || 0);
+  state.pmUnreadCacheAt = Date.now();
   setBadges();
   return state.unreadPm;
 }
@@ -1404,6 +1425,46 @@ function renderFriends() {
   $$("[data-decline]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/friend-requests/${button.dataset.decline}/decline`, { method: "POST" }); await loadFriends(); }));
   $$("[data-remove-friend]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/friends/${button.dataset.removeFriend}`, { method: "DELETE" }); await loadFriends(); }));
   $$("[data-unblock]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/social/blocks/${button.dataset.unblock}`, { method: "DELETE" }); await loadFriends(); }));
+}
+
+function paintFriendsWall(posts = []) {
+  const feed = $("#friendsWallFeed");
+  if (!feed) return;
+  feed.innerHTML = posts.map((post) => {
+    const authorName = post.display_name || post.username;
+    const ownerName = post.profile_display_name || post.profile_username;
+    const ownWall = Number(post.author_id) === Number(post.profile_user_id);
+    const canDelete = Number(post.author_id) === Number(state.me.id) || Number(post.profile_user_id) === Number(state.me.id) || staffRanks.has(state.me.rank);
+    return `
+      <article class="friends-wall-card">
+        <button class="wall-author-avatar" data-wall-profile="${post.author_id}" type="button"><img src="${html(post.avatar_url || "/assets/avatar-other.svg")}" alt="" loading="lazy" decoding="async" /></button>
+        <div class="wall-card-content">
+          <div class="wall-card-head">
+            <div><button data-wall-profile="${post.author_id}" type="button"><strong>${html(authorName)}</strong></button>${rankBadge(post.rank_name)}<small>${ownWall ? "shared an update" : `wrote on ${html(ownerName)}'s wall`}</small></div>
+            <time>${formatDate(post.created_at)} · ${formatTime(post.created_at)}</time>
+          </div>
+          <p>${html(post.body)}</p>
+          <div class="wall-card-actions"><button data-wall-profile="${post.profile_user_id}" type="button">View wall</button>${canDelete ? `<button data-delete-global-wall="${post.id}" type="button">Remove</button>` : ""}</div>
+        </div>
+      </article>`;
+  }).join("") || '<div class="empty-state wall-empty"><strong>Your wall is ready</strong><p class="muted">Add friends or post the first update.</p></div>';
+  $$('[data-wall-profile]', feed).forEach((button) => button.addEventListener("click", () => openProfile(Number(button.dataset.wallProfile)).catch((error) => toast(error.message))));
+  $$('[data-delete-global-wall]', feed).forEach((button) => button.addEventListener("click", async () => {
+    if (!confirm("Remove this wall post?")) return;
+    await api(`/api/social/wall-posts/${button.dataset.deleteGlobalWall}`, { method: "DELETE" });
+    state.friendsWallCache = null;
+    await renderFriendsWall({ force: true });
+  }));
+}
+
+async function renderFriendsWall({ force = false } = {}) {
+  const fresh = state.friendsWallCache && Date.now() - state.friendsWallCacheAt < 20000;
+  if (state.friendsWallCache) paintFriendsWall(state.friendsWallCache);
+  if (!force && fresh) return;
+  const posts = await api("/api/social/friends-wall?limit=30", force ? { cache: "no-store" } : {});
+  state.friendsWallCache = posts;
+  state.friendsWallCacheAt = Date.now();
+  if ($("#wallView")?.classList.contains("active")) paintFriendsWall(posts);
 }
 
 function openFriendRequestDrawer() {
@@ -1456,6 +1517,8 @@ async function openReportQueueDrawer() {
 }
 
 async function openProfile(userId) {
+  stopProfileMusic();
+  state.activeProfileUserId = Number(userId);
   $("#drawer")?.classList.add("hidden");
   if (state.compactLayout) {
     $("#app")?.classList.add("right-closed");
@@ -1489,6 +1552,8 @@ async function openProfile(userId) {
   $("#profileFrameOverlay").classList.toggle("active", Boolean(previewFrame));
   $("#profileFrameOverlay").style.backgroundImage = previewFrame ? `url('${profileFrameAssets[previewFrame]}')` : "";
   $("#profileMore").innerHTML = "";
+  $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Wall loads when opened</strong></div>';
+  $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Gallery loads when opened</strong></div>';
   $("#profileCornerActions").innerHTML = '<button data-close-profile title="Close" type="button">x</button>';
   $("[data-close-profile]")?.addEventListener("click", () => $("#profileModal").close());
   if (!$("#profileModal").open) $("#profileModal").showModal();
@@ -1547,11 +1612,12 @@ async function openProfile(userId) {
         <article><span>Badges</span><strong>${badgeCount}</strong></article>
       </div>
     </div>
-    ${user.profileMusicUrl ? `<div class="profile-music"><span>Profile music</span><audio id="activeProfileMusic" controls autoplay preload="none" src="${html(user.profileMusicUrl)}"></audio></div>` : ""}
+    ${user.profileMusicUrl ? `<div class="profile-music"><div><span>Now playing</span><strong>${html(displayName(user))}'s profile soundtrack</strong></div><audio id="activeProfileMusic" controls autoplay preload="none" src="${html(user.profileMusicUrl)}"></audio></div>` : '<div class="profile-empty-feature"><strong>No profile soundtrack yet</strong><span>This profile stays quiet until a track is added.</span></div>'}
+    ${profileBadgesPanel(data)}
+    ${profileRoomsPanel(user)}
   `;
-  $("#profileFriends").innerHTML = "";
-  $("#profileBadges").innerHTML = "";
-  $("#profileActivity").innerHTML = "";
+  $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the wall</strong></div>';
+  $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the gallery</strong></div>';
   $$(".profile-tabs button").forEach((button) => button.classList.toggle("active", button.dataset.profileTab === "info"));
   $$(".profile-tab").forEach((panel) => panel.classList.remove("active"));
   $("#profileInfo").classList.add("active");
@@ -1624,23 +1690,21 @@ function profileBadgesPanel(data) {
   `;
 }
 
-function profileSocialPanel(user, data) {
+function profileWallPanel(user, wall = []) {
   const self = Number(user.id) === Number(state.me.id);
-  const wall = data.wall || [];
-  const gallery = data.gallery || [];
   return `
-    <section class="profile-section">
-      <h3>Friend wall</h3>
+    <section class="profile-section profile-social-section">
+      <div class="profile-section-heading"><div><span class="eyebrow">Friends wall</span><h3>Leave a note for ${html(displayName(user))}</h3></div><span>${wall.length} posts</span></div>
       <form class="wall-form" data-wall-form="${user.id}">
-        <input name="body" maxlength="500" placeholder="Write on ${html(user.username)}'s wall" />
+        <input name="body" maxlength="500" placeholder="Write something kind..." />
         <button class="primary" type="submit">Post</button>
       </form>
       <div class="wall-list">
         ${wall.map((post) => `
           <article class="wall-post">
-            <img class="avatar" src="${html(post.avatar_url || "/assets/avatar-other.svg")}" alt="" />
+            <img class="avatar" src="${html(post.avatar_url || "/assets/avatar-other.svg")}" alt="" loading="lazy" decoding="async" />
             <div>
-              <strong>${html(post.username)}</strong>
+              <strong>${html(post.display_name || post.username)}</strong>
               <p>${html(post.body)}</p>
               <small>${formatDate(post.created_at)} ${formatTime(post.created_at)}</small>
               <div class="mini-actions">
@@ -1652,14 +1716,40 @@ function profileSocialPanel(user, data) {
         `).join("") || '<p class="muted">No wall posts yet.</p>'}
       </div>
     </section>
-    <section class="profile-section">
-      <h3>Gallery</h3>
-      ${self ? `<form class="gallery-form" id="galleryForm"><input id="galleryUpload" type="file" accept="image/*" /><input name="caption" placeholder="Caption" /><button class="primary" type="submit">Upload</button></form>` : ""}
+  `;
+}
+
+function profileGalleryPanel(user, gallery = []) {
+  const self = Number(user.id) === Number(state.me.id);
+  return `
+    <section class="profile-section profile-social-section">
+      <div class="profile-section-heading"><div><span class="eyebrow">Gallery</span><h3>${html(displayName(user))}'s moments</h3></div><span>${gallery.length} photos</span></div>
+      ${self ? `<form class="gallery-form" id="galleryForm"><label class="gallery-drop">Choose photo<input id="galleryUpload" type="file" accept="image/*" /></label><input name="caption" maxlength="180" placeholder="Add a caption" /><button class="primary" type="submit">Upload</button></form>` : ""}
       <div class="gallery-grid">
-        ${gallery.map((item) => `<figure><img src="${html(item.image_url)}" alt="" /><figcaption>${html(item.caption || "")}</figcaption>${self ? `<button data-delete-gallery="${item.id}" type="button">Delete</button>` : ""}</figure>`).join("") || '<p class="muted">No gallery images yet.</p>'}
+        ${gallery.map((item) => `<figure><img src="${html(item.image_url)}" data-zoom-src="${html(item.image_url)}" alt="${html(item.caption || "Gallery photo")}" loading="lazy" decoding="async" /><figcaption>${html(item.caption || "Untitled moment")}</figcaption>${self ? `<button data-delete-gallery="${item.id}" type="button">Remove</button>` : ""}</figure>`).join("") || '<div class="profile-empty-feature"><strong>No photos yet</strong><span>The first memory will appear here.</span></div>'}
       </div>
     </section>
   `;
+}
+
+async function loadProfileSection(userId, section, { force = false } = {}) {
+  if (!["wall", "gallery"].includes(section)) return;
+  const key = `${Number(userId)}:${section}`;
+  const panel = $(`#profile${section[0].toUpperCase()}${section.slice(1)}`);
+  const profileData = state.profileCache.get(Number(userId))?.data;
+  const user = profileData?.user || userById(userId) || (Number(userId) === Number(state.me?.id) ? state.me : null);
+  if (!panel || !user) return;
+  const cached = state.profileSocialCache.get(key);
+  if (!force && cached && Date.now() - cached.at < 20000) {
+    panel.innerHTML = section === "wall" ? profileWallPanel(user, cached.data.wall || []) : profileGalleryPanel(user, cached.data.gallery || []);
+    bindProfileSocialActions(userId);
+    return;
+  }
+  panel.innerHTML = '<div class="profile-loading-card"><span></span><strong>Loading...</strong></div>';
+  const data = await api(`/api/social/profiles/${userId}/social?section=${section}`, force ? { cache: "no-store" } : {});
+  state.profileSocialCache.set(key, { data, at: Date.now() });
+  panel.innerHTML = section === "wall" ? profileWallPanel(user, data.wall || []) : profileGalleryPanel(user, data.gallery || []);
+  bindProfileSocialActions(userId);
 }
 
 function bindProfileSocialActions(userId) {
@@ -1669,7 +1759,8 @@ function bindProfileSocialActions(userId) {
     if (!String(body || "").trim()) return toast("Write something for the wall.");
     await api(`/api/social/profiles/${userId}/wall`, { method: "POST", body: JSON.stringify({ body }) });
     toast("Wall post saved.");
-    await openProfile(userId);
+    state.profileSocialCache.delete(`${Number(userId)}:wall`);
+    await loadProfileSection(userId, "wall", { force: true });
   });
   $("#galleryForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1679,7 +1770,8 @@ function bindProfileSocialActions(userId) {
     form.set("image", file);
     await api("/api/social/profiles/me/gallery", { method: "POST", body: form });
     toast("Gallery image uploaded.");
-    await openProfile(userId);
+    state.profileSocialCache.delete(`${Number(userId)}:gallery`);
+    await loadProfileSection(userId, "gallery", { force: true });
   });
   $$("[data-report-wall]").forEach((button) => button.addEventListener("click", () => openReportModal({
     targetType: "wall",
@@ -1690,12 +1782,14 @@ function bindProfileSocialActions(userId) {
   $$("[data-delete-wall]").forEach((button) => button.addEventListener("click", async () => {
     if (!confirm("Delete this wall post?")) return;
     await api(`/api/social/wall-posts/${button.dataset.deleteWall}`, { method: "DELETE" });
-    await openProfile(userId);
+    state.profileSocialCache.delete(`${Number(userId)}:wall`);
+    await loadProfileSection(userId, "wall", { force: true });
   }));
   $$("[data-delete-gallery]").forEach((button) => button.addEventListener("click", async () => {
     if (!confirm("Delete this gallery image?")) return;
     await api(`/api/social/gallery/${button.dataset.deleteGallery}`, { method: "DELETE" });
-    await openProfile(userId);
+    state.profileSocialCache.delete(`${Number(userId)}:gallery`);
+    await loadProfileSection(userId, "gallery", { force: true });
   }));
 }
 
@@ -2178,6 +2272,7 @@ function openChatOptionsPanel() {
 }
 
 function openProfileEditor(section = "edit") {
+  stopProfileMusic();
   const form = $("#editProfileForm");
   if (form && state.me) {
     const canSetTitle = Boolean(state.permissions?.customTitle || state.me.rank === "developer");
@@ -2202,6 +2297,11 @@ function openProfileEditor(section = "edit") {
     form.bubbleStyle.value = state.me.bubbleStyle || "default";
     $("#editBannerPreview").style.setProperty("--edit-banner", `url('${state.me.bannerUrl || "/assets/profile-banner.svg"}')`);
     $("#editAvatarPreview").src = avatar(state.me);
+    $("#profileMusicUpload").value = "";
+    $("#profileSoundPreview").innerHTML = state.me.profileMusicUrl
+      ? `<audio controls preload="metadata" src="${html(state.me.profileMusicUrl)}"></audio><span>Current soundtrack</span>`
+      : "<span>No track added</span>";
+    $("#removeProfileMusicButton").disabled = !state.me.profileMusicUrl;
     $("#bioCount").textContent = `${form.bio.value.length}/120`;
     $$("[data-accent]").forEach((button) => button.classList.toggle("active", button.dataset.accent === form.profileAccent.value));
   }
@@ -2311,7 +2411,10 @@ async function handleOwnAction(action) {
   if (action === "room-options") return openRoomOptionsPanel();
   if (action === "level") return openLevelPanel();
   if (action === "wallet") return openWalletPanel();
-  if (["edit", "username", "about", "mood", "colors", "theme"].includes(action)) return openProfileEditor(action);
+  if (["edit", "username", "about", "mood", "colors", "theme"].includes(action)) {
+    if ($("#profileModal").open) $("#profileModal").close();
+    return openProfileEditor(action);
+  }
   if (action === "friends" || action === "privacy") {
     state.userTab = "friends";
     $$("[data-user-tab]").forEach((button) => button.classList.toggle("active", button.dataset.userTab === "friends"));
@@ -2917,6 +3020,14 @@ const realtimeHandlers = {
     scheduleUsersRefresh();
     setBadges();
   },
+  "profile-wall"(data = {}) {
+    state.friendsWallCache = null;
+    state.profileSocialCache.delete(`${Number(data.profileUserId)}:wall`);
+    if ($("#wallView")?.classList.contains("active")) renderFriendsWall({ force: true }).catch(() => {});
+    if ($("#profileModal")?.open && Number(state.activeProfileUserId) === Number(data.profileUserId) && $("#profileWall")?.classList.contains("active")) {
+      loadProfileSection(data.profileUserId, "wall", { force: true }).catch(() => {});
+    }
+  },
   "intruder-score-updated"() {
     state.leaderboardCache.shooters = null;
     if ($("#leaderboardView").classList.contains("active")) renderLeaderboard({ force: true }).catch((error) => toast(error.message));
@@ -3027,9 +3138,9 @@ async function refreshVisibleData({ force = false } = {}) {
   state.lastSyncAt = Date.now();
   try {
     const results = await Promise.allSettled([
-      force || Date.now() - Number(state.usersCacheAt || 0) > 30000 ? refreshUsersLight() : Promise.resolve(),
-      loadMessages(),
-      refreshPmUnread(),
+      force || Date.now() - Number(state.usersCacheAt || 0) > 45000 ? refreshUsersLight() : Promise.resolve(),
+      $("#chatView").classList.contains("active") ? loadMessages() : Promise.resolve(),
+      force || Date.now() - Number(state.pmUnreadCacheAt || 0) > 30000 ? refreshPmUnread() : Promise.resolve(),
       force || Date.now() - Number(state.friendsCacheAt || 0) > 60000 ? loadFriends() : Promise.resolve(),
       $("#newsView").classList.contains("active") ? renderNews({ force }) : Promise.resolve(),
       $("#leaderboardView").classList.contains("active") ? renderLeaderboard({ force }) : Promise.resolve(),
@@ -3182,6 +3293,25 @@ function bindEvents() {
     if (button.dataset.view === "admin") await renderAdmin();
   }));
   $$("[data-close-view]").forEach((button) => button.addEventListener("click", () => setView("chat")));
+  $("#roomSearch")?.addEventListener("input", renderRoomGrid);
+  $("#wallRefresh")?.addEventListener("click", () => renderFriendsWall({ force: true }).catch((error) => toast(error.message)));
+  $("#friendsWallForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = String(new FormData(event.currentTarget).get("body") || "").trim();
+    if (!body) return toast("Write something before posting.");
+    const button = event.currentTarget.querySelector("button[type='submit']");
+    button.disabled = true;
+    try {
+      await api(`/api/social/profiles/${state.me.id}/wall`, { method: "POST", body: JSON.stringify({ body }) });
+      event.currentTarget.reset();
+      state.friendsWallCache = null;
+      state.profileSocialCache.delete(`${Number(state.me.id)}:wall`);
+      await renderFriendsWall({ force: true });
+      toast("Posted to your friends wall.");
+    } finally {
+      button.disabled = false;
+    }
+  });
   $("#reportFlagIcon").addEventListener("click", (event) => {
     event.stopPropagation();
     openReportQueueDrawer().catch((error) => toast(error.message));
@@ -3353,6 +3483,31 @@ function bindEvents() {
     const file = $("#bannerUpload").files[0];
     if (file) $("#editBannerPreview").style.setProperty("--edit-banner", `url('${URL.createObjectURL(file)}')`);
   });
+  $("#profileMusicUpload")?.addEventListener("change", () => {
+    const file = $("#profileMusicUpload").files[0];
+    if (!file) return;
+    $("#profileSoundPreview").innerHTML = `<audio controls preload="metadata" src="${URL.createObjectURL(file)}"></audio><span>${html(file.name)}</span>`;
+  });
+  $("#removeAvatarButton")?.addEventListener("click", async () => {
+    const result = await api("/api/auth/me/avatar", { method: "DELETE" });
+    state.me.avatarUrl = result.avatarUrl;
+    $("#editAvatarPreview").src = result.avatarUrl;
+    $("#topAvatar").src = result.avatarUrl;
+    toast("Profile photo removed.");
+  });
+  $("#removeBannerButton")?.addEventListener("click", async () => {
+    const result = await api("/api/auth/me/banner", { method: "DELETE" });
+    state.me.bannerUrl = result.bannerUrl;
+    $("#editBannerPreview").style.setProperty("--edit-banner", `url('${result.bannerUrl}')`);
+    toast("Profile cover removed.");
+  });
+  $("#removeProfileMusicButton")?.addEventListener("click", async () => {
+    await api("/api/social/store/profile-music", { method: "DELETE" });
+    state.me.profileMusicUrl = null;
+    $("#profileMusicUpload").value = "";
+    $("#profileSoundPreview").innerHTML = "<span>No track added</span>";
+    toast("Profile soundtrack removed.");
+  });
   $("#editProfileForm").bio.addEventListener("input", () => {
     $("#bioCount").textContent = `${$("#editProfileForm").bio.value.length}/120`;
   });
@@ -3368,12 +3523,19 @@ function bindEvents() {
       closeProfileActionsOverlay();
     }
   });
-  $("#profileModal").addEventListener("close", closeProfileActionsOverlay);
+  $("#profileModal").addEventListener("close", () => {
+    stopProfileMusic();
+    closeProfileActionsOverlay();
+    state.activeProfileUserId = null;
+  });
   $$(".profile-tabs [data-profile-tab]").forEach((button) => button.addEventListener("click", () => {
     $$(".profile-tabs button").forEach((b) => b.classList.remove("active"));
     $$(".profile-tab").forEach((panel) => panel.classList.remove("active"));
     button.classList.add("active");
     $(`#profile${button.dataset.profileTab[0].toUpperCase()}${button.dataset.profileTab.slice(1)}`).classList.add("active");
+    if (["wall", "gallery"].includes(button.dataset.profileTab) && state.activeProfileUserId) {
+      loadProfileSection(state.activeProfileUserId, button.dataset.profileTab).catch((error) => toast(error.message));
+    }
   }));
 
   $("#editProfileForm").addEventListener("submit", async (event) => {
@@ -3394,6 +3556,14 @@ function bindEvents() {
       form.append("banner", $("#bannerUpload").files[0]);
       await api("/api/auth/me/banner", { method: "POST", body: form });
     }
+    if ($("#profileMusicUpload")?.files[0]) {
+      const form = new FormData();
+      form.append("music", $("#profileMusicUpload").files[0]);
+      await api("/api/social/store/profile-music", { method: "POST", body: form });
+    }
+    state.profileCache.delete(Number(state.me.id));
+    state.profileSocialCache.delete(`${Number(state.me.id)}:wall`);
+    state.profileSocialCache.delete(`${Number(state.me.id)}:gallery`);
     await bootstrap();
     $("#editProfileModal").close();
   });
