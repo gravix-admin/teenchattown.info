@@ -2191,7 +2191,6 @@ async function openProfile(userId) {
   $("#profileIntel").innerHTML = "";
   $("#profileIntelTabButton")?.classList.add("hidden");
   $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Wall loads when opened</strong></div>';
-  $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Gallery loads when opened</strong></div>';
   $("#profileCornerActions").innerHTML = '<button data-close-profile title="Close" type="button">x</button>';
   $("[data-close-profile]")?.addEventListener("click", () => $("#profileModal").close());
   if (!$("#profileModal").open) $("#profileModal").showModal();
@@ -2243,7 +2242,6 @@ async function openProfile(userId) {
   $("#profileIntelTabButton")?.classList.toggle("hidden", !canViewIntel);
   $("#profileIntel").innerHTML = canViewIntel ? '<div class="profile-loading-card"><span></span><strong>Open this tab to load staff intelligence</strong></div>' : "";
   $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the wall</strong></div>';
-  $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the gallery</strong></div>';
   $$(".profile-tabs button").forEach((button) => button.classList.toggle("active", button.dataset.profileTab === "info"));
   $$(".profile-tab").forEach((panel) => panel.classList.remove("active"));
   $("#profileInfo").classList.add("active");
@@ -3042,10 +3040,6 @@ function openProfileEditor(section = "edit") {
   }
   if (!$("#editProfileModal").open) $("#editProfileModal").showModal();
   if (form) form.scrollTop = 0;
-  loadEditProfileGallery().catch((error) => {
-    const grid = $("#editGalleryGrid");
-    if (grid) grid.innerHTML = `<div class="edit-gallery-empty">${html(error.message)}</div>`;
-  });
   const field = {
     username: "input[name='username']",
     about: "textarea[name='aboutMe']",
@@ -4341,59 +4335,6 @@ function bindEvents() {
     $(`#${button.dataset.editJump}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   $("#editProfileForm").profileStatus.addEventListener("change", (event) => updateStatusPreview(event.currentTarget.value));
-  $("#editGalleryUpload").addEventListener("change", () => {
-    const file = $("#editGalleryUpload").files[0];
-    if (!file) return clearEditGallerySelection();
-    if (!String(file.type || "").startsWith("image/")) {
-      clearEditGallerySelection();
-      return toast("Choose an image file.");
-    }
-    if (file.size > 4 * 1024 * 1024) {
-      clearEditGallerySelection();
-      return toast("Gallery images must be 4 MB or smaller.");
-    }
-    if (state.editGalleryPreviewUrl) URL.revokeObjectURL(state.editGalleryPreviewUrl);
-    state.editGalleryPreviewUrl = URL.createObjectURL(file);
-    const drop = $("#editGalleryDrop");
-    drop.classList.add("has-preview");
-    drop.style.setProperty("--edit-gallery-preview", `url('${state.editGalleryPreviewUrl}')`);
-    $("strong", drop).textContent = file.name;
-    $("small", drop).textContent = `${Math.max(1, Math.round(file.size / 1024))} KB selected`;
-  });
-  $("#editGalleryAddButton").addEventListener("click", async () => {
-    const file = $("#editGalleryUpload").files[0];
-    if (!file) return toast("Choose a gallery image.");
-    const button = $("#editGalleryAddButton");
-    button.disabled = true;
-    try {
-      const form = new FormData();
-      form.append("image", file);
-      form.append("caption", $("#editGalleryCaption").value.trim());
-      await api("/api/social/profiles/me/gallery", { method: "POST", body: form });
-      state.profileSocialCache.delete(`${Number(state.me.id)}:gallery`);
-      clearEditGallerySelection();
-      await loadEditProfileGallery({ force: true });
-      toast("Photo added to your profile gallery.");
-    } catch (error) {
-      toast(error.message);
-    } finally {
-      button.disabled = false;
-    }
-  });
-  $("#editGalleryGrid").addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-edit-gallery-delete]");
-    if (!button || !confirm("Remove this gallery photo?")) return;
-    button.disabled = true;
-    try {
-      await api(`/api/social/gallery/${button.dataset.editGalleryDelete}`, { method: "DELETE" });
-      state.profileSocialCache.delete(`${Number(state.me.id)}:gallery`);
-      await loadEditProfileGallery({ force: true });
-      toast("Gallery photo removed.");
-    } catch (error) {
-      toast(error.message);
-      button.disabled = false;
-    }
-  });
   $("#editProfileForm").bio.addEventListener("input", () => {
     $("#bioCount").textContent = `${$("#editProfileForm").bio.value.length}/120`;
   });
@@ -4414,13 +4355,13 @@ function bindEvents() {
     closeProfileActionsOverlay();
     state.activeProfileUserId = null;
   });
-  $("#editProfileModal").addEventListener("close", clearEditGallerySelection);
+  $("#editProfileModal").addEventListener("close", () => {});
   $$(".profile-tabs [data-profile-tab]").forEach((button) => button.addEventListener("click", () => {
     $$(".profile-tabs button").forEach((b) => b.classList.remove("active"));
     $$(".profile-tab").forEach((panel) => panel.classList.remove("active"));
     button.classList.add("active");
     $(`#profile${button.dataset.profileTab[0].toUpperCase()}${button.dataset.profileTab.slice(1)}`).classList.add("active");
-    if (["wall", "gallery"].includes(button.dataset.profileTab) && state.activeProfileUserId) {
+    if (button.dataset.profileTab === "wall" && state.activeProfileUserId) {
       loadProfileSection(state.activeProfileUserId, button.dataset.profileTab).catch((error) => toast(error.message));
     }
     if (button.dataset.profileTab === "intel" && state.activeProfileUserId) loadProfileIntel(state.activeProfileUserId).catch((error) => toast(error.message));
