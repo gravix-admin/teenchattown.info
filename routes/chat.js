@@ -13,7 +13,17 @@ const router = express.Router();
 const upload = chatUpload("chat");
 const roomUpload = imageUpload("rooms");
 const roomCache = new Map();
+const roomMessageCache = new Map();
 const ROOM_CACHE_TTL_MS = 60000;
+const ROOM_MESSAGE_CACHE_TTL_MS = 3000;
+
+function clearRoomMessageCache(roomId = null) {
+  if (roomId === null) return roomMessageCache.clear();
+  const prefix = `${Number(roomId)}:`;
+  for (const key of roomMessageCache.keys()) {
+    if (key.startsWith(prefix)) roomMessageCache.delete(key);
+  }
+}
 
 function muted(user) {
   return user.muted_until && new Date(user.muted_until) > new Date();
@@ -92,6 +102,12 @@ router.get("/events", requireAuth, async (req, res) => {
 
 router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 20), 80);
+  const cacheKey = `${Number(req.params.roomId)}:${limit}`;
+  const cached = roomMessageCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    res.set("X-TCT-Message-Cache", "HIT");
+    return res.json(cached.rows);
+  }
   const [rows] = await pool.query(
     `SELECT recent.* FROM (
        SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame
@@ -121,6 +137,9 @@ router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req
     }
     for (const row of rows) row.reactions = reactionsByMessage.get(Number(row.id)) || [];
   }
+  if (roomMessageCache.size >= 100) roomMessageCache.delete(roomMessageCache.keys().next().value);
+  roomMessageCache.set(cacheKey, { rows, expiresAt: Date.now() + ROOM_MESSAGE_CACHE_TTL_MS });
+  res.set("X-TCT-Message-Cache", "MISS");
   res.json(rows);
 });
 
@@ -135,6 +154,7 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     if (!match) return res.status(400).json({ error: 'Use /bet "gold amount".' });
     try {
       const result = await handleBetCommand(req.params.roomId, req.user, match[1]);
+      clearRoomMessageCache(req.params.roomId);
       return res.status(result.private ? 200 : 201).json(result);
     } catch (error) {
       return res.status(error.status || 400).json({ error: error.message || "Bet could not be placed." });
@@ -145,6 +165,7 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     if (req.body.replyToId) return res.status(400).json({ error: "Clear the reply before using a command." });
     try {
       const result = await handleFunCommand(req.params.roomId, req.user, body);
+      clearRoomMessageCache(req.params.roomId);
       return res.status(201).json(result);
     } catch (error) {
       return res.status(error.status || 400).json({ error: error.message || "Command could not be completed." });
@@ -185,6 +206,7 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     bubble_style: req.user.bubble_style,
     frame: req.user.frame,
   };
+  clearRoomMessageCache(req.params.roomId);
   broadcast("message", message);
   res.status(201).json(message);
   (async () => {
@@ -213,6 +235,7 @@ router.delete("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (
        AND user_id NOT IN (SELECT id FROM users WHERE rank_name = 'bot' OR LOWER(username) = 'intruder')`,
     [req.params.roomId, `${INTRUDER_PREFIX}%`]
   );
+  clearRoomMessageCache(req.params.roomId);
   broadcast("room-cleared", { roomId: Number(req.params.roomId), by: req.user.username });
   res.json({ ok: true });
 });
@@ -224,6 +247,7 @@ router.patch("/messages/:messageId", requireAuth, async (req, res) => {
   if (await isProtectedSystemMessage(message)) return res.status(403).json({ error: "System bot messages cannot be edited." });
   if (message.user_id !== req.user.id && !isStaff(req.user)) return res.status(403).json({ error: "Cannot edit this message." });
   await pool.query("UPDATE messages SET body = ?, edited_at = NOW() WHERE id = ?", [String(req.body.body || "").slice(0, 1200), message.id]);
+  clearRoomMessageCache(message.room_id);
   broadcast("message-updated", { id: message.id, body: req.body.body });
   res.json({ ok: true });
 });
@@ -235,24 +259,27 @@ router.delete("/messages/:messageId", requireAuth, async (req, res) => {
   if (await isProtectedSystemMessage(message)) return res.status(403).json({ error: "System bot messages cannot be deleted." });
   if (message.user_id !== req.user.id && !(isStaff(req.user) && await hasTool(req.user, "deleteMessage"))) return res.status(403).json({ error: "Cannot delete this message." });
   await pool.query("UPDATE messages SET deleted_at = NOW() WHERE id = ?", [message.id]);
+  clearRoomMessageCache(message.room_id);
   broadcast("message-deleted", { id: message.id });
   res.json({ ok: true });
 });
 
 router.post("/messages/:messageId/reactions", requireAuth, async (req, res) => {
-  const [[message]] = await pool.query("SELECT id, user_id, body FROM messages WHERE id = ?", [req.params.messageId]);
+  const [[message]] = await pool.query("SELECT id, room_id, user_id, body FROM messages WHERE id = ?", [req.params.messageId]);
   if (await isProtectedSystemMessage(message)) return res.status(403).json({ error: "System bot messages cannot be reacted to." });
   const emoji = String(req.body.emoji || "like").slice(0, 20);
   await pool.query("INSERT IGNORE INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)", [req.params.messageId, req.user.id, emoji]);
+  clearRoomMessageCache(message.room_id);
   broadcast("reaction", { messageId: Number(req.params.messageId), emoji });
   res.json({ ok: true });
 });
 
 router.post("/messages/:messageId/pin", requireAuth, async (req, res) => {
   if (!isStaff(req.user)) return res.status(403).json({ error: "Staff only." });
-  const [[message]] = await pool.query("SELECT id, user_id, body FROM messages WHERE id = ?", [req.params.messageId]);
+  const [[message]] = await pool.query("SELECT id, room_id, user_id, body FROM messages WHERE id = ?", [req.params.messageId]);
   if (await isProtectedSystemMessage(message)) return res.status(403).json({ error: "System bot messages cannot be pinned." });
   await pool.query("UPDATE messages SET is_pinned = 1 - is_pinned WHERE id = ?", [req.params.messageId]);
+  clearRoomMessageCache(message.room_id);
   broadcast("message-pinned", { id: Number(req.params.messageId) });
   res.json({ ok: true });
 });
@@ -314,6 +341,7 @@ router.delete("/rooms/:roomId", requireAuth, async (req, res) => {
     connection.release();
   }
   roomCache.clear();
+  clearRoomMessageCache(room.id);
   broadcast("rooms-changed", { id: room.id, deleted: true });
   res.json({ ok: true });
 });
