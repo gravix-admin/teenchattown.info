@@ -15,7 +15,7 @@ const roomUpload = imageUpload("rooms");
 const roomCache = new Map();
 const roomMessageCache = new Map();
 const ROOM_CACHE_TTL_MS = 60000;
-const ROOM_MESSAGE_CACHE_TTL_MS = 3000;
+const ROOM_MESSAGE_CACHE_TTL_MS = 15000;
 
 function clearRoomMessageCache(roomId = null) {
   if (roomId === null) return roomMessageCache.clear();
