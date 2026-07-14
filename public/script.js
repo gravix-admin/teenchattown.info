@@ -986,7 +986,7 @@ function openRoomPasswordModal(room) {
 async function loadMessages() {
   if (!state.currentRoomId) return;
   try {
-    state.messages = await api(`/api/chat/rooms/${state.currentRoomId}/messages?limit=50`);
+    state.messages = await api(`/api/chat/rooms/${state.currentRoomId}/messages?limit=30`);
     renderMessages();
   } catch (error) {
     const room = state.rooms.find((item) => Number(item.id) === Number(state.currentRoomId));
@@ -1019,8 +1019,7 @@ function messageAttachmentHtml(row, imageClass = "attachment") {
   return '<img class="' + html(imageClass) + ' zoomable-image" data-zoom-src="' + html(url) + '" src="' + html(url) + '" alt="attachment" loading="lazy" decoding="async" />';
 }
 
-function renderMessages() {
-  $("#messages").innerHTML = state.messages.map((message) => {
+function messageMarkup(message) {
     const user = {
       id: message.user_id,
       username: message.username,
@@ -1054,7 +1053,7 @@ function renderMessages() {
         </div>
       </div>
     `;
-    return `
+  return `
       <article class="message ${isOwn ? "own" : ""}${protectedSystemMessage ? " message-system message-intruder" : ""}${message.pending ? " message-pending" : ""}${bubbleClass}" data-message-id="${message.id}">
         ${avatarMarkup}
         <div class="message-card" style="--message-color:${html(user.textColor || "#fbf7ff")}">
@@ -1069,9 +1068,24 @@ function renderMessages() {
         </div>
       </article>
     `;
-  }).join("");
-  bindMessageActions();
-  $("#messages").scrollTop = $("#messages").scrollHeight;
+}
+
+function renderMessages() {
+  const container = $("#messages");
+  if (!container) return;
+  const currentIds = $$('[data-message-id]', container).map((node) => String(node.dataset.messageId));
+  const nextIds = state.messages.map((message) => String(message.id));
+  const canAppendOne = nextIds.length === currentIds.length + 1
+    && currentIds.every((id, index) => id === nextIds[index]);
+  if (canAppendOne) {
+    container.insertAdjacentHTML("beforeend", messageMarkup(state.messages[state.messages.length - 1]));
+    const article = container.lastElementChild;
+    bindMessageActions(article);
+  } else {
+    container.innerHTML = state.messages.map(messageMarkup).join("");
+    bindMessageActions(container);
+  }
+  container.scrollTop = container.scrollHeight;
 }
 
 function renderIntruderMessage(payload) {
@@ -1214,8 +1228,9 @@ function renderSlashSuggestions() {
   }));
 }
 
-function bindMessageActions() {
-  $$("[data-message-menu]").forEach((button) => button.addEventListener("click", (event) => {
+function bindMessageActions(root = $("#messages")) {
+  if (!root) return;
+  $$("[data-message-menu]", root).forEach((button) => button.addEventListener("click", (event) => {
     event.stopPropagation();
     const menu = $(`[data-menu-for="${button.dataset.messageMenu}"]`);
     const wasHidden = menu.classList.contains("hidden");
@@ -1223,8 +1238,8 @@ function bindMessageActions() {
     menu.classList.toggle("hidden", !wasHidden);
     button.closest(".message")?.classList.toggle("menu-open", wasHidden);
   }));
-  $$(".message-menu").forEach((menu) => menu.addEventListener("click", () => closeMessageMenus()));
-  $$(".message-card", $("#messages")).forEach((card) => {
+  $$(".message-menu", root).forEach((menu) => menu.addEventListener("click", () => closeMessageMenus()));
+  $$(".message-card", root).forEach((card) => {
     const article = card.closest("[data-message-id]");
     const messageId = article?.dataset.messageId;
     if (!messageId) return;
@@ -1246,11 +1261,11 @@ function bindMessageActions() {
       state.lastTapAt = now;
     }, { passive: false });
   });
-  $$("[data-message-profile]", $("#messages")).forEach((button) => button.addEventListener("click", () => {
+  $$("[data-message-profile]", root).forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
     openProfile(Number(button.dataset.messageProfile)).catch((error) => toast(error.message));
   }));
-  $$("[data-tag-user]", $("#messages")).forEach((button) => button.addEventListener("click", () => {
+  $$("[data-tag-user]", root).forEach((button) => button.addEventListener("click", () => {
     const username = button.dataset.tagUser;
     if (!username || username === state.me?.username) return;
     const input = $("#messageInput");
@@ -1268,7 +1283,7 @@ function bindMessageActions() {
     input.setSelectionRange(cursor, cursor);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }));
-  $$("[data-reply]").forEach((button) => button.addEventListener("click", () => {
+  $$("[data-reply]", root).forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
     state.replyToId = button.dataset.reply;
     const message = state.messages.find((item) => Number(item.id) === Number(state.replyToId));
@@ -1277,15 +1292,15 @@ function bindMessageActions() {
     $("#replyBox").classList.remove("hidden");
     $("#messageInput").focus();
   }));
-  $$("[data-quote]").forEach((button) => button.addEventListener("click", () => {
+  $$("[data-quote]", root).forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
     quoteMessage(button.dataset.quote);
   }));
-  $$("[data-react]").forEach((button) => button.addEventListener("click", async () => {
+  $$("[data-react]", root).forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     await api(`/api/chat/messages/${button.dataset.react}/reactions`, { method: "POST", body: JSON.stringify({ emoji: button.dataset.emoji }) });
   }));
-  $$("[data-edit]").forEach((button) => button.addEventListener("click", async () => {
+  $$("[data-edit]", root).forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     const message = state.messages.find((item) => Number(item.id) === Number(button.dataset.edit));
     const body = prompt("Edit message", message?.body || "");
@@ -1293,17 +1308,17 @@ function bindMessageActions() {
       await api(`/api/chat/messages/${button.dataset.edit}`, { method: "PATCH", body: JSON.stringify({ body }) });
     }
   }));
-  $$("[data-delete]").forEach((button) => button.addEventListener("click", async () => {
+  $$("[data-delete]", root).forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     if (confirm("Delete this message?")) {
       await api(`/api/chat/messages/${button.dataset.delete}`, { method: "DELETE" });
     }
   }));
-  $$("[data-pin]").forEach((button) => button.addEventListener("click", async () => {
+  $$("[data-pin]", root).forEach((button) => button.addEventListener("click", async () => {
     closeMessageMenus();
     await api(`/api/chat/messages/${button.dataset.pin}/pin`, { method: "POST" });
   }));
-  $$("[data-report-message]").forEach((button) => button.addEventListener("click", () => {
+  $$("[data-report-message]", root).forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
     openReportModal({
     targetType: "message",
@@ -1313,7 +1328,7 @@ function bindMessageActions() {
     label: `message #${button.dataset.reportMessage}`,
   });
   }));
-  $$("[data-join-xo]", $("#messages")).forEach((button) => button.addEventListener("click", async () => {
+  $$("[data-join-xo]", root).forEach((button) => button.addEventListener("click", async () => {
     try {
       await api("/api/games/xo/" + button.dataset.joinXo + "/join", { method: "POST" });
       await openXoGame(button.dataset.joinXo);
@@ -1321,7 +1336,7 @@ function bindMessageActions() {
       toast(error.message);
     }
   }));
-  $$("[data-open-xo]", $("#messages")).forEach((button) => button.addEventListener("click", () => {
+  $$("[data-open-xo]", root).forEach((button) => button.addEventListener("click", () => {
     openXoGame(button.dataset.openXo).catch((error) => toast(error.message));
   }));
 }
@@ -3932,7 +3947,9 @@ async function refreshVisibleData({ force = false } = {}) {
   try {
     const results = await Promise.allSettled([
       force || Date.now() - Number(state.usersCacheAt || 0) > 45000 ? refreshUsersLight() : Promise.resolve(),
-      $("#chatView").classList.contains("active") ? loadMessages() : Promise.resolve(),
+      $("#chatView").classList.contains("active") && (force || !state.messages.length || (!state.socket?.connected && !state.eventSource))
+        ? loadMessages()
+        : Promise.resolve(),
       force || Date.now() - Number(state.pmUnreadCacheAt || 0) > 30000 ? refreshPmUnread() : Promise.resolve(),
       force || Date.now() - Number(state.friendsCacheAt || 0) > 60000 ? loadFriends() : Promise.resolve(),
       $("#newsView").classList.contains("active") ? renderNews({ force }) : Promise.resolve(),
