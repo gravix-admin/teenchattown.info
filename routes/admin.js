@@ -68,9 +68,21 @@ router.get("/tools/summary", async (req, res) => {
     ? await pool.query("SELECT tool, allowed FROM role_permissions WHERE rank_name = 'chief' AND tool IN ('intruderTool', 'profileEditTool')")
     : [[]];
   const intruderAccess = await specialToolAccess(req.user, "intruderTool");
+  const toolState = intruderAccess ? await getIntruderState() : null;
+  const intruder = toolState?.intruder;
   res.set("Cache-Control", "private, no-store");
   res.json({
-    tools: intruderAccess ? await getIntruderState() : null,
+    tools: intruder ? {
+      intruder: {
+        enabled: intruder.enabled,
+        minIntervalMinutes: intruder.minIntervalMinutes,
+        maxIntervalMinutes: intruder.maxIntervalMinutes,
+        nextSpawnAt: intruder.nextSpawnAt,
+        botName: intruder.botName,
+        botAvatarUrl: intruder.botAvatarUrl,
+        activeRound: intruder.activeRound,
+      },
+    } : null,
     toolAccess: {
       intruderTool: Boolean(Number(chiefAccess.find((row) => row.tool === "intruderTool")?.allowed || 0)),
       profileEditTool: Boolean(Number(chiefAccess.find((row) => row.tool === "profileEditTool")?.allowed || 0)),
