@@ -2,7 +2,7 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const pool = require("../database");
 const { requireAuth, isStaff, rankPower, cacheUser } = require("../middleware/auth");
-const { imageUpload, fileToDataUrl } = require("../services/upload");
+const { chatUpload, imageUpload, fileToDataUrl } = require("../services/upload");
 const { addClient, removeClient, broadcast, notifyUser } = require("../services/events");
 const { INTRUDER_PREFIX, handlePossibleShot } = require("../services/intruderService");
 const { BET_PREFIX, handleBetCommand } = require("../services/betService");
@@ -10,8 +10,7 @@ const { FUN_PREFIXES, handleFunCommand } = require("../services/funCommandServic
 const { publicUser } = require("../services/userService");
 
 const router = express.Router();
-const upload = imageUpload("gallery");
-const voiceUpload = imageUpload("voice");
+const upload = chatUpload("chat");
 const roomUpload = imageUpload("rooms");
 const roomCache = new Map();
 const ROOM_CACHE_TTL_MS = 60000;
@@ -124,7 +123,7 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
       return res.status(error.status || 400).json({ error: error.message || "Bet could not be placed." });
     }
   }
-  if (/^\/(?:confess|ship|steal|hunt)(?:\s|$)/i.test(body)) {
+  if (/^\/(?:confess|ship|steal|hunt|roast)(?:\s|$)/i.test(body)) {
     if (req.file) return res.status(400).json({ error: "Commands cannot include an attachment." });
     if (req.body.replyToId) return res.status(400).json({ error: "Clear the reply before using a command." });
     try {
@@ -339,6 +338,8 @@ router.post("/private-messages", requireAuth, upload.single("attachment"), async
     body,
     attachment_url: attachmentUrl,
     attachmentUrl,
+    attachment_type: req.file?.mimetype || null,
+    attachmentType: req.file?.mimetype || null,
     created_at: new Date(),
     createdAt: new Date()
   };
