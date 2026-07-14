@@ -1,7 +1,8 @@
 const bcrypt = require("bcrypt");
 const pool = require("../database");
+const { RANKS } = require("./ranks");
 
-const ranks = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
+const ranks = RANKS;
 const staffTools = ["mute", "kick", "ban", "warn", "deleteMessage", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "sendPm", "sendFiles", "createRoom", "editRoom", "seeIp", "postNews", "intruderTool", "profileEditTool"];
 
 async function query(sql) {
@@ -162,6 +163,9 @@ async function initSchema() {
       profile_likes INT DEFAULT 0,
       visitor_count INT DEFAULT 0,
       svip_until DATETIME NULL,
+      rank_until DATETIME NULL,
+      rank_plan VARCHAR(20) NULL,
+      rank_base VARCHAR(32) NULL,
       ip_address VARCHAR(80) DEFAULT '',
       country VARCHAR(80) DEFAULT '',
       muted_until DATETIME NULL,
@@ -487,6 +491,25 @@ async function initSchema() {
     )
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS xo_games (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      room_id INT NOT NULL,
+      host_id INT NOT NULL,
+      guest_id INT NULL,
+      board VARCHAR(9) NOT NULL DEFAULT '---------',
+      turn_user_id INT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'waiting',
+      winner_id INT NULL,
+      stakes_locked TINYINT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY xo_room_status (room_id, status),
+      KEY xo_host_status (host_id, status),
+      KEY xo_guest_status (guest_id, status)
+    )
+  `);
+
   await migrateExistingTables();
   await ensureUserIdentitiesAreUnique();
 
@@ -529,6 +552,9 @@ async function migrateExistingTables() {
       profile_likes: "INT DEFAULT 0",
       visitor_count: "INT DEFAULT 0",
       svip_until: "DATETIME NULL",
+      rank_until: "DATETIME NULL",
+      rank_plan: "VARCHAR(20) NULL",
+      rank_base: "VARCHAR(32) NULL",
       ip_address: "VARCHAR(80) DEFAULT ''",
       country: "VARCHAR(80) DEFAULT ''",
       muted_until: "DATETIME NULL",
@@ -826,6 +852,7 @@ async function migrateLegacyUserData() {
     await pool.query("UPDATE users SET banned_until = DATE_ADD(NOW(), INTERVAL 365 DAY) WHERE banned_until IS NULL AND banned = 1");
   }
   await pool.query("UPDATE users SET rank_name = 'supervisor' WHERE rank_name = 'super visor'");
+  await pool.query("UPDATE users SET rank_until = svip_until, rank_plan = COALESCE(rank_plan, '7d'), rank_base = COALESCE(rank_base, 'user') WHERE rank_name = 's-vip' AND svip_until IS NOT NULL AND rank_until IS NULL");
   await pool.query("UPDATE users SET rank_name = 'bot', profile_status = 'Invisible', show_online_status = 0 WHERE LOWER(username) IN ('intruder', 'zombie')");
   await pool.query("INSERT IGNORE INTO role_permissions (rank_name, tool, allowed) SELECT 'supervisor', tool, allowed FROM role_permissions WHERE rank_name = 'super visor'");
   await pool.query("DELETE FROM role_permissions WHERE rank_name = 'super visor'");
@@ -878,6 +905,9 @@ async function seedDefaults() {
       "s-vip": "#a855f7",
       king: "#38bdf8",
       queen: "#fb7185",
+      devil: "#ef4444",
+      angel: "#67e8f9",
+      legend: "#facc15",
       premium: "#ec4899",
       moderator: "#22c55e",
       admin: "#ef4444",
@@ -903,7 +933,7 @@ async function seedDefaults() {
         || (rank === "moderator" && ["mute", "kick", "warn", "deleteMessage"].includes(tool))
         || (tool === "sendPm")
         || (tool === "sendFiles" && rank !== "vip")
-        || (["premium", "king", "queen", "s-vip"].includes(rank) && ["createRoom", "customTitle", "invisibleStatus"].includes(tool))
+        || (["premium", "legend", "angel", "devil", "king", "queen", "s-vip"].includes(rank) && ["createRoom", "customTitle", "invisibleStatus"].includes(tool))
         || (["vip"].includes(rank) && tool === "invisibleStatus"));
       await pool.query(
         "INSERT IGNORE INTO role_permissions (rank_name, tool, allowed) VALUES (?, ?, ?)",
