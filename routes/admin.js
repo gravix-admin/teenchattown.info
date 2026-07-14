@@ -1,10 +1,13 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const pool = require("../database");
-const { requireAuth, canControl, isStaff, rankPower } = require("../middleware/auth");
+const authRoutes = require("./auth");
+const { requireAuth, canControl, isStaff, rankPower, invalidateUserCache } = require("../middleware/auth");
 const { adminStats } = require("../services/userService");
 const { ranks, staffTools } = require("../services/schema");
 const { broadcast, notifyUser } = require("../services/events");
+const { imageUpload, fileToDataUrl } = require("../services/upload");
+const { getIntruderState, resetIntruderScores, updateIntruderSettings } = require("../services/intruderService");
 const {
   normalizeUsername,
   normalizeEmail,
@@ -16,15 +19,36 @@ const {
 } = require("../services/identity");
 
 const router = express.Router();
+const newsUpload = imageUpload("news");
+const INTRUDER_PREFIX = "::intruder:";
 
 function hasPanel(user) {
   return ["admin", "chief", "developer"].includes(user.rank_name);
+}
+
+function developerOnly(req, res, next) {
+  if (req.user.rank_name !== "developer") return res.status(403).json({ error: "Developer access required." });
+  next();
 }
 
 async function permission(user, tool) {
   if (user.rank_name === "developer") return true;
   const [[row]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = ?", [user.rank_name, tool]);
   return Boolean(row?.allowed);
+}
+
+async function specialToolAccess(user, tool) {
+  return user.rank_name === "developer" || (user.rank_name === "chief" && await permission(user, tool));
+}
+
+async function requireIntruderTool(req, res, next) {
+  if (!(await specialToolAccess(req.user, "intruderTool"))) return res.status(403).json({ error: "Intruder tool access required." });
+  next();
+}
+
+async function requireProfileEditTool(req, res, next) {
+  if (!(await specialToolAccess(req.user, "profileEditTool"))) return res.status(403).json({ error: "Edit tool access required." });
+  next();
 }
 
 async function canDeletePrivateChats(user) {
@@ -39,17 +63,22 @@ router.use(requireAuth);
 
 router.get("/dashboard", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
-  const [users] = await pool.query("SELECT id, username, email, rank_name, avatar_url, ip_address, xp, gold, diamonds, muted_until, kicked_until, banned_until, last_seen, created_at FROM users ORDER BY created_at DESC LIMIT 100");
+  const [users] = await pool.query(
+    `SELECT id, username, rank_name
+     FROM users
+     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
+     ORDER BY created_at DESC LIMIT 60`
+  );
   const [permissions] = await pool.query("SELECT * FROM role_permissions");
   const [logs] = await pool.query(
-    `SELECT al.*, u.username AS actor_name FROM admin_logs al JOIN users u ON u.id = al.actor_id ORDER BY al.created_at DESC LIMIT 50`
+    `SELECT al.*, u.username AS actor_name FROM admin_logs al JOIN users u ON u.id = al.actor_id ORDER BY al.created_at DESC LIMIT 25`
   );
   const [reports] = await pool.query(
     `SELECT r.*, reporter.username AS reporter_name, target.username AS target_name
      FROM reports r
      LEFT JOIN users reporter ON reporter.id = r.reporter_id
      LEFT JOIN users target ON target.id = r.target_user_id
-     ORDER BY r.created_at DESC LIMIT 50`
+     ORDER BY r.created_at DESC LIMIT 30`
   );
   const [privateConversations] = await pool.query(
     `SELECT c.user_one_id, u1.username AS user_one_name, u1.avatar_url AS user_one_avatar,
@@ -69,7 +98,7 @@ router.get("/dashboard", async (req, res) => {
      JOIN users u1 ON u1.id = c.user_one_id
      JOIN users u2 ON u2.id = c.user_two_id
      ORDER BY latest.created_at DESC
-     LIMIT 50`
+     LIMIT 20`
   );
   res.json({
     stats: await adminStats(),
@@ -80,6 +109,11 @@ router.get("/dashboard", async (req, res) => {
     privateConversations,
     ranks,
     staffTools,
+    tools: await specialToolAccess(req.user, "intruderTool") ? await getIntruderState() : null,
+    toolAccess: {
+      intruderTool: Boolean(Number(permissions.find((p) => p.rank_name === "chief" && p.tool === "intruderTool")?.allowed || 0)),
+      profileEditTool: Boolean(Number(permissions.find((p) => p.rank_name === "chief" && p.tool === "profileEditTool")?.allowed || 0)),
+    },
   });
 });
 
@@ -89,6 +123,11 @@ router.patch("/users/:id", async (req, res) => {
   if (!canControl(req.user.rank_name, target.rank_name)) return res.status(403).json({ error: "You cannot control that user." });
   const updates = {};
   if (req.body.rank && ranks.includes(req.body.rank)) {
+    if (req.body.rank === "bot") return res.status(403).json({ error: "Bot rank is reserved for system accounts." });
+    if (!(await permission(req.user, "changeRank"))) return res.status(403).json({ error: "Your rank cannot change user ranks." });
+    if (req.user.rank_name !== "developer" && (target.rank_name === "premium" || req.body.rank === "premium")) {
+      return res.status(403).json({ error: "Only a developer can change or assign Premium rank." });
+    }
     if (!canControl(req.user.rank_name, req.body.rank)) return res.status(403).json({ error: "You cannot assign that rank." });
     updates.rank_name = req.body.rank;
     updates.rank_until = null;
@@ -116,9 +155,11 @@ router.patch("/users/:id", async (req, res) => {
     if (req.body.avatarUrl !== undefined) updates.avatar_url = String(req.body.avatarUrl).slice(0, 500);
     if (req.body.bannerUrl !== undefined) updates.banner_url = String(req.body.bannerUrl).slice(0, 500);
   }
-  if (req.body.gold !== undefined) updates.gold = Number(req.body.gold);
-  if (req.body.diamonds !== undefined) updates.diamonds = Number(req.body.diamonds);
-  if (req.body.xp !== undefined) updates.xp = Number(req.body.xp);
+  if (req.user.rank_name === "developer") {
+    if (req.body.gold !== undefined) updates.gold = Number(req.body.gold);
+    if (req.body.diamonds !== undefined) updates.diamonds = Number(req.body.diamonds);
+    if (req.body.xp !== undefined) updates.xp = Number(req.body.xp);
+  }
   const entries = Object.entries(updates);
   if (entries.length) {
     try {
@@ -128,6 +169,7 @@ router.patch("/users/:id", async (req, res) => {
       throw error;
     }
   }
+  invalidateUserCache(target.id);
   await log(req.user.id, "update_user", "user", target.id, JSON.stringify(updates));
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
@@ -167,7 +209,47 @@ router.post("/users/:id/moderate", async (req, res) => {
   } else {
     return res.status(400).json({ error: "Unknown action." });
   }
+  invalidateUserCache(target.id);
   await log(req.user.id, action, "user", target.id, reason);
+  broadcast("users-changed", { userId: target.id });
+  res.json({ ok: true });
+});
+
+router.post("/users/:id/profile-edit", requireProfileEditTool, async (req, res) => {
+  const [[target]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.params.id]);
+  if (!target) return res.status(404).json({ error: "User not found." });
+  if (!canControl(req.user.rank_name, target.rank_name)) return res.status(403).json({ error: "You cannot edit that user." });
+
+  const action = String(req.body.action || "");
+  if (action === "username") {
+    const username = normalizeUsername(req.body.username);
+    if (!isValidUsername(username)) return res.status(400).json({ error: "Username must be 3-18 letters, numbers, or underscores." });
+    const conflict = await findUserIdentityConflict(pool, { username, excludeId: target.id });
+    if (conflict.username) return res.status(409).json({ error: "This username is already taken." });
+    await pool.query("UPDATE users SET username = ? WHERE id = ?", [username, target.id]);
+    await log(req.user.id, "profile_edit_username", "user", target.id, username);
+  } else if (action === "deleteAvatar") {
+    const avatarUrl = `/assets/avatar-${["male", "female", "other"].includes(target.gender) ? target.gender : "other"}.svg`;
+    await pool.query("UPDATE users SET avatar_url = ? WHERE id = ?", [avatarUrl, target.id]);
+    await log(req.user.id, "profile_edit_avatar_delete", "user", target.id, avatarUrl);
+  } else if (action === "password") {
+    const newPassword = String(req.body.password || "");
+    if (newPassword.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters." });
+    await pool.query(
+      "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
+      [await bcrypt.hash(newPassword, 10), target.id]
+    );
+    notifyUser(target.id, "moderation", { action: "password", title: "Password changed", body: "A developer changed your password. Please log in again." });
+    await log(req.user.id, "profile_edit_password", "user", target.id, "password changed");
+  } else if (action === "deleteAccount") {
+    await pool.query("DELETE FROM users WHERE id = ?", [target.id]);
+    notifyUser(target.id, "moderation", { action: "delete", title: "Account deleted", body: "Your account was deleted by staff." });
+    await log(req.user.id, "profile_edit_delete_account", "user", target.id, "deleted");
+  } else {
+    return res.status(400).json({ error: "Unknown edit action." });
+  }
+
+  invalidateUserCache(target.id);
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
 });
@@ -209,6 +291,16 @@ router.post("/reports/:id/action", async (req, res) => {
 
   let deleted = false;
   if (report.message_id) {
+    const [[message]] = await pool.query(
+      `SELECT m.body, u.username, u.rank_name
+       FROM messages m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.id = ?`,
+      [report.message_id]
+    );
+    if (message && (message.rank_name === "bot" || String(message.username || "").toLowerCase() === "intruder" || String(message.body || "").startsWith(INTRUDER_PREFIX))) {
+      return res.status(403).json({ error: "System bot messages cannot be deleted." });
+    }
     await pool.query("UPDATE messages SET deleted_at = NOW() WHERE id = ?", [report.message_id]);
     broadcast("message-deleted", { id: Number(report.message_id) });
     deleted = true;
@@ -250,19 +342,21 @@ router.delete("/private-conversations/:userOneId/:userTwoId", async (req, res) =
 router.post("/permissions", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
   const { rank, tool, allowed } = req.body;
-  if (!ranks.includes(rank) || !staffTools.includes(tool)) return res.status(400).json({ error: "Invalid permission." });
+  if (rank === "bot" || !ranks.includes(rank) || !staffTools.includes(tool)) return res.status(400).json({ error: "Invalid permission." });
+  if (["intruderTool", "profileEditTool"].includes(tool)) return res.status(400).json({ error: "Use the developer tools panel for this permission." });
   if (rankPower(rank) >= rankPower(req.user.rank_name)) return res.status(403).json({ error: "You cannot edit that rank." });
   await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES (?, ?, ?)", [rank, tool, allowed ? 1 : 0]);
+  authRoutes.invalidatePermissionCache?.(rank);
   await log(req.user.id, "permission", "rank", null, `${rank}:${tool}:${allowed}`);
+  broadcast("users-changed", { rank, tool });
   res.json({ ok: true });
 });
 
-router.post("/news", async (req, res) => {
-  if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
+router.post("/news", newsUpload.single("image"), async (req, res) => {
   if (!(await permission(req.user, "postNews"))) return res.status(403).json({ error: "Your rank cannot post news." });
   const title = String(req.body.title || "").trim().slice(0, 120);
   const body = String(req.body.body || "").trim().slice(0, 2000);
-  const imageUrl = String(req.body.imageUrl || "").trim().slice(0, 500) || null;
+  const imageUrl = req.file ? fileToDataUrl(req.file) : null;
   if (!title || !body) return res.status(400).json({ error: "News title and body are required." });
   const [result] = await pool.query(
     "INSERT INTO news_posts (author_id, title, body, image_url) VALUES (?, ?, ?, ?)",
@@ -276,10 +370,69 @@ router.post("/news", async (req, res) => {
 router.post("/rank-badges", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
   const { rank, label, color, imageUrl } = req.body;
-  if (!ranks.includes(rank) || rankPower(rank) >= rankPower(req.user.rank_name)) return res.status(403).json({ error: "You cannot edit that rank." });
+  if (rank === "bot" || !ranks.includes(rank) || rankPower(rank) >= rankPower(req.user.rank_name)) return res.status(403).json({ error: "You cannot edit that rank." });
   await pool.query("REPLACE INTO rank_badges (rank_name, label, color, image_url) VALUES (?, ?, ?, ?)", [rank, String(label || rank).slice(0, 16), String(color || "#8b5cf6").slice(0, 24), imageUrl || null]);
   await log(req.user.id, "rank_badge", "rank", null, rank);
   res.json({ ok: true });
+});
+
+router.get("/tools", requireIntruderTool, async (_req, res) => {
+  res.json(await getIntruderState());
+});
+
+router.post("/tools/access", developerOnly, async (req, res) => {
+  const tool = String(req.body.tool || "");
+  if (!["intruderTool", "profileEditTool"].includes(tool)) return res.status(400).json({ error: "Unknown tool." });
+  await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES ('chief', ?, ?)", [tool, req.body.enabled ? 1 : 0]);
+  authRoutes.invalidatePermissionCache?.("chief");
+  await log(req.user.id, "tool_access", "rank", null, `chief:${tool}:${Boolean(req.body.enabled)}`);
+  broadcast("users-changed", { rank: "chief", tool });
+  res.json({ ok: true, tool, enabled: Boolean(req.body.enabled) });
+});
+
+router.post("/tools/intruder", requireIntruderTool, async (req, res) => {
+  const enabled = Boolean(req.body.enabled);
+  const state = await updateIntruderSettings({
+    enabled,
+    minIntervalMinutes: req.body.minIntervalMinutes,
+    maxIntervalMinutes: req.body.maxIntervalMinutes,
+    intervalMinutes: req.body.intervalMinutes,
+    botName: req.body.botName,
+    botAvatarUrl: req.body.botAvatarUrl,
+  });
+  await log(req.user.id, enabled ? "intruder_start" : "intruder_stop", "tool", null, JSON.stringify(state.intruder));
+  res.json(state);
+});
+
+router.post("/tools/user-values", developerOnly, async (req, res) => {
+  const userId = Number(req.body.userId);
+  const field = String(req.body.field || "");
+  const value = Math.floor(Number(req.body.value));
+  if (!userId || !["gold", "diamonds", "xp", "shoot"].includes(field)) return res.status(400).json({ error: "Choose a user and value to change." });
+  if (!Number.isFinite(value) || value < 0 || value > 2000000000) return res.status(400).json({ error: "Value must be between 0 and 2,000,000,000." });
+  const [[target]] = await pool.query("SELECT id, username FROM users WHERE id = ? AND rank_name <> 'bot'", [userId]);
+  if (!target) return res.status(404).json({ error: "User not found." });
+  if (field === "shoot") {
+    await pool.query(
+      `INSERT INTO intruder_scores (user_id, points, shots)
+       VALUES (?, ?, 0)
+       ON DUPLICATE KEY UPDATE points = VALUES(points)`,
+      [userId, value]
+    );
+    broadcast("intruder-score-updated", { userId });
+  } else {
+    await pool.query(`UPDATE users SET ${field} = ? WHERE id = ?`, [value, userId]);
+    invalidateUserCache(userId);
+    broadcast("users-changed", { userId });
+  }
+  await log(req.user.id, "developer_change_value", "user", userId, `${field}:${value}`);
+  res.json({ ok: true, userId, field, value });
+});
+
+router.post("/tools/intruder/reset", requireIntruderTool, async (req, res) => {
+  const state = await resetIntruderScores();
+  await log(req.user.id, "intruder_reset", "tool", null, "top shooters reset");
+  res.json(state);
 });
 
 module.exports = router;

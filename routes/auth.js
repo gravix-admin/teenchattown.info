@@ -32,6 +32,11 @@ const directoryCache = { rows: null, at: 0 };
 const DIRECTORY_CACHE_MS = 5000;
 const PERMISSION_CACHE_MS = 30000;
 
+function invalidatePermissionCache(rank = null) {
+  if (rank) permissionCache.delete(String(rank));
+  else permissionCache.clear();
+}
+
 async function userDirectory() {
   if (directoryCache.rows && Date.now() - directoryCache.at < DIRECTORY_CACHE_MS) return directoryCache.rows;
   const [rows] = await pool.query(
@@ -319,4 +324,5 @@ router.post("/me/cancel-delete", requireAuth, async (req, res) => {
   res.json({ message: "Account deletion cancelled." });
 });
 
+router.invalidatePermissionCache = invalidatePermissionCache;
 module.exports = router;
