@@ -6,6 +6,7 @@ const { requireAuth, isStaff, invalidateUserCache } = require("../middleware/aut
 const { notifyUser, broadcast } = require("../services/events");
 const { publicUser } = require("../services/userService");
 const { audioUpload, imageUpload, fileToDataUrl } = require("../services/upload");
+const { rankPower, normalizeRank } = require("../services/ranks");
 
 const router = express.Router();
 const galleryUpload = imageUpload("gallery");
@@ -18,19 +19,41 @@ const giftCatalog = {
   crown: { title: "Crown", costGold: 250 },
   diamond: { title: "Diamond", costGold: 500 },
 };
-const svipPlans = {
-  "7d": { label: "7 days", days: 7, diamonds: 50, gold: 1000 },
-  "1m": { label: "1 month", days: 30, diamonds: 100, gold: 5000 },
-  "3m": { label: "3 months", days: 90, diamonds: 200, gold: 10000 },
-  lifetime: { label: "Lifetime", days: 36500, diamonds: 1000, gold: 25000 },
+const durationLabels = { "7d": "7 days", "1m": "1 month", "3m": "3 months", lifetime: "Lifetime" };
+const durationDays = { "7d": 7, "1m": 30, "3m": 90, lifetime: null };
+const durationPower = { "7d": 0, "1m": 1, "3m": 2, lifetime: 3 };
+const rankPlans = {
+  "s-vip": {
+    "7d": { diamonds: 50, gold: 1000 },
+    "1m": { diamonds: 100, gold: 5000 },
+    "3m": { diamonds: 200, gold: 10000 },
+    lifetime: { diamonds: 1000, gold: 25000 },
+  },
+  devil: {
+    "7d": { diamonds: 150, gold: 2000 },
+    "1m": { diamonds: 300, gold: 7000 },
+    "3m": { diamonds: 700, gold: 15000 },
+    lifetime: { diamonds: 1500, gold: 50000 },
+  },
+  angel: {
+    "7d": { diamonds: 150, gold: 2000 },
+    "1m": { diamonds: 300, gold: 7000 },
+    "3m": { diamonds: 700, gold: 15000 },
+    lifetime: { diamonds: 1500, gold: 50000 },
+  },
+  legend: {
+    "7d": { diamonds: 500, gold: 5000 },
+    "1m": { diamonds: 1200, gold: 18000 },
+    "3m": { diamonds: 2500, gold: 45000 },
+    lifetime: { diamonds: 7000, gold: 1000000 },
+  },
 };
-const rankPower = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
-const freeStoreRanks = new Set(["premium"]);
+const freeStoreRanks = new Set(["premium", "admin", "developer"]);
 const storeItems = {
   "profile-music": { currency: "gold", cost: 2000 },
   "profile-frames": { currency: "diamonds", cost: 100 },
 };
-const storeFrames = new Set(["cosmic", "solar", "prism", "gothic", "angelic", "classic-gold"]);
+const storeFrames = new Set(["cosmic", "solar", "prism", "gothic", "angelic", "classic-gold", "royal-laurel", "sun-throne"]);
 const responseCache = { news: null, newsAt: 0, leaderboards: new Map() };
 
 function clearNewsCache() {
@@ -424,6 +447,12 @@ router.post("/store/purchase", requireAuth, async (req, res) => {
 
 router.post("/store/frame", requireAuth, async (req, res) => {
   const frame = String(req.body.frame || "");
+  if (frame === "clean") {
+    await pool.query("UPDATE users SET frame = 'clean' WHERE id = ?", [req.user.id]);
+    invalidateUserCache(req.user.id);
+    broadcast("users-changed", { userId: req.user.id });
+    return res.json({ ok: true, frame: "clean" });
+  }
   if (!storeFrames.has(frame)) return res.status(400).json({ error: "Choose a valid profile frame." });
   if (!(await hasStoreItem(req.user, "profile-frames"))) return res.status(403).json({ error: "Unlock Profile Frames from the Chat Store first." });
   await pool.query("UPDATE users SET frame = ? WHERE id = ?", [frame, req.user.id]);
@@ -656,35 +685,53 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
   res.json({ xp, gold, diamonds, shooters });
 });
 
-router.post("/memberships/svip", requireAuth, async (req, res) => {
-  const plan = svipPlans[String(req.body.plan || "")];
-  if (!plan) return res.status(400).json({ error: "Choose a valid S-VIP plan." });
+router.post("/memberships/rank", requireAuth, async (req, res) => {
+  const targetRank = normalizeRank(req.body.rank);
+  const planCode = String(req.body.plan || "");
+  const price = rankPlans[targetRank]?.[planCode];
+  if (!price || !durationLabels[planCode]) return res.status(400).json({ error: "Choose a valid rank and time period." });
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [[user]] = await connection.query("SELECT id, rank_name, gold, diamonds, svip_until FROM users WHERE id = ? FOR UPDATE", [req.user.id]);
+    const [[user]] = await connection.query("SELECT id, rank_name, gold, diamonds, svip_until, rank_until, rank_plan, rank_base FROM users WHERE id = ? FOR UPDATE", [req.user.id]);
     if (!user) throw new Error("User not found.");
-    if (Number(user.gold) < plan.gold || Number(user.diamonds) < plan.diamonds) throw new Error("Not enough gold or diamonds for this S-VIP plan.");
-    const base = user.svip_until && new Date(user.svip_until) > new Date() ? "svip_until" : "NOW()";
-    const shouldUpgrade = rankPower.indexOf(user.rank_name) < rankPower.indexOf("s-vip");
+    const currentRank = normalizeRank(user.rank_name);
+    const currentPower = rankPower(currentRank);
+    const targetPower = rankPower(targetRank);
+    if (currentPower >= rankPower("premium")) throw new Error("Premium and staff ranks cannot buy ranks.");
+    if (currentPower > targetPower) throw new Error("You cannot buy a rank below your current rank.");
+    const activeUntil = user.rank_until && new Date(user.rank_until) > new Date();
+    if (currentRank === targetRank && !activeUntil) throw new Error("You already have " + targetRank.toUpperCase() + " rank.");
+    if (currentRank === targetRank && activeUntil) {
+      if (user.rank_plan === planCode) throw new Error(`Your ${durationLabels[planCode]} ${targetRank.toUpperCase()} plan is already active.`);
+      if (durationPower[planCode] <= durationPower[user.rank_plan]) throw new Error("Choose a longer active period than your current plan.");
+    }
+    if (Number(user.gold) < price.gold || Number(user.diamonds) < price.diamonds) throw new Error("Not enough gold or diamonds for this rank plan.");
+    const baseRank = activeUntil && user.rank_base ? user.rank_base : currentRank;
+    const rankUntil = planCode === "lifetime" ? "9999-12-31 23:59:59" : null;
     await connection.query(
       `UPDATE users
-       SET gold = gold - ?, diamonds = diamonds - ?, svip_until = DATE_ADD(${base}, INTERVAL ? DAY)${shouldUpgrade ? ", rank_name = 's-vip'" : ""}
+       SET gold = gold - ?, diamonds = diamonds - ?, rank_name = ?, rank_plan = ?, rank_base = ?,
+           rank_until = ${rankUntil ? "?" : "DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY)"},
+           svip_until = ${targetRank === "s-vip" ? (rankUntil ? "?" : "DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY)") : "NULL"}
        WHERE id = ?`,
-      [plan.gold, plan.diamonds, plan.days, user.id]
+      rankUntil
+        ? [price.gold, price.diamonds, targetRank, planCode, baseRank, rankUntil, ...(targetRank === "s-vip" ? [rankUntil] : []), user.id]
+        : [price.gold, price.diamonds, targetRank, planCode, baseRank, durationDays[planCode], ...(targetRank === "s-vip" ? [durationDays[planCode]] : []), user.id]
     );
     await connection.query(
       "INSERT INTO notifications (user_id, type, title, body) VALUES (?, ?, ?, ?)",
-      [user.id, "membership", "S-VIP activated", `Your ${plan.label} S-VIP package is active.`]
+      [user.id, "membership", `${targetRank.toUpperCase()} activated`, `Your ${durationLabels[planCode]} ${targetRank.toUpperCase()} package is active.`]
     );
     await connection.commit();
-    notifyUser(user.id, "notification", { type: "membership", title: "S-VIP activated", body: `Your ${plan.label} S-VIP package is active.` });
+    invalidateUserCache(user.id);
+    notifyUser(user.id, "notification", { type: "membership", title: `${targetRank.toUpperCase()} activated`, body: `Your ${durationLabels[planCode]} package is active.` });
     broadcast("users-changed", { userId: user.id });
-    const [[fresh]] = await pool.query("SELECT gold, diamonds, rank_name, svip_until FROM users WHERE id = ?", [user.id]);
-    res.json({ ok: true, plan: plan.label, user: fresh });
+    const [[fresh]] = await pool.query("SELECT gold, diamonds, rank_name, svip_until, rank_until, rank_plan FROM users WHERE id = ?", [user.id]);
+    res.json({ ok: true, rank: targetRank, plan: durationLabels[planCode], user: fresh });
   } catch (error) {
     await connection.rollback();
-    res.status(400).json({ error: error.message || "Could not buy S-VIP." });
+    res.status(400).json({ error: error.message || "Could not buy this rank." });
   } finally {
     connection.release();
   }
