@@ -91,12 +91,21 @@ const state = {
   pmUnreadCacheAt: 0,
   inflightGets: new Map(),
   userActionsBound: false,
+  selectedRank: "s-vip",
+  activeXoGameId: null,
+  voiceRecorder: null,
+  voiceStream: null,
+  voiceChunks: [],
+  voiceStopTimer: null,
+  voiceTarget: null,
+  preferEventSource: false,
+  eventRetryMs: 1500,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const staffRanks = new Set(["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"]);
-const rankOrder = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
+const rankOrder = ["bot", "user", "vip", "s-vip", "king", "queen", "devil", "angel", "legend", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
 const assignableRanks = rankOrder.filter((rank) => rank !== "bot");
 const systemUsernames = new Set(["intruder", "zombie"]);
 const slashCommands = [
@@ -105,6 +114,7 @@ const slashCommands = [
   ["/ship", "Check chemistry: /ship @user1 @user2"],
   ["/steal", "Risk gold: /steal @user (10 minute cooldown)"],
   ["/hunt", "Find 5-50 diamonds (10 minute cooldown)"],
+  ["/roast", "TownBot roast: /roast \"username\""],
   ["/clear", "Staff: clear the current room"],
   ["@wb username", "Send a welcome back message"],
   ["/gif", "Search a GIF"],
@@ -134,7 +144,9 @@ const confessPrefix = "::confess:";
 const shipPrefix = "::ship:";
 const stealPrefix = "::steal:";
 const huntPrefix = "::hunt:";
-const funCommandPrefixes = [confessPrefix, shipPrefix, stealPrefix, huntPrefix];
+const roastPrefix = "::roast:";
+const xoPrefix = "::xo:";
+const funCommandPrefixes = [confessPrefix, shipPrefix, stealPrefix, huntPrefix, roastPrefix];
 const profileFrameAssets = {
   cosmic: "/assets/frame-cosmic.png",
   solar: "/assets/frame-solar.png",
@@ -142,7 +154,25 @@ const profileFrameAssets = {
   gothic: "/assets/frame-gothic.png",
   angelic: "/assets/frame-angelic.png",
   "classic-gold": "/assets/frame-classic-gold.png",
+  "royal-laurel": "/assets/frame-royal-laurel.png",
+  "sun-throne": "/assets/frame-sun-throne.png",
 };
+const rankShopCatalog = {
+  "s-vip": { name: "S-VIP", tagline: "Signature violet status", plans: {
+    "7d": [50, 1000], "1m": [100, 5000], "3m": [200, 10000], lifetime: [1000, 25000],
+  } },
+  devil: { name: "Devil", tagline: "Crimson fire and fearless presence", plans: {
+    "7d": [150, 2000], "1m": [300, 7000], "3m": [700, 15000], lifetime: [1500, 50000],
+  } },
+  angel: { name: "Angel", tagline: "Celestial light and serene prestige", plans: {
+    "7d": [150, 2000], "1m": [300, 7000], "3m": [700, 15000], lifetime: [1500, 50000],
+  } },
+  legend: { name: "Legend", tagline: "The highest purchasable town status", plans: {
+    "7d": [500, 5000], "1m": [1200, 18000], "3m": [2500, 45000], lifetime: [7000, 1000000],
+  } },
+};
+const rankPlanLabels = { "7d": "7 Days", "1m": "1 Month", "3m": "3 Months", lifetime: "Lifetime" };
+const rankPlanPower = { "7d": 0, "1m": 1, "3m": 2, lifetime: 3 };
 
 function roomLocked(room) {
   return Boolean(room?.locked || room?.password_hash);
@@ -360,6 +390,7 @@ function setView(view) {
     renderNews().catch((error) => toast(error.message));
   }
   if (view === "leaderboard") renderLeaderboard().catch((error) => toast(error.message));
+  if (view === "games" && !state.activeXoGameId) renderGames().catch((error) => toast(error.message));
   if (view === "chatStore") renderChatStore().catch((error) => toast(error.message));
 }
 
@@ -570,6 +601,97 @@ function selectMessageAttachment(file) {
   closeComposerTools();
 }
 
+function voiceMimeType() {
+  if (!window.MediaRecorder) return "";
+  return ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4", "audio/webm"].find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+}
+
+function setVoiceRecordingUi(active, target) {
+  const pmButton = $("#pmVoiceButton");
+  if (pmButton) {
+    pmButton.classList.toggle("recording", active && target?.type === "pm");
+    pmButton.title = active ? "Stop and send voice message" : "Voice message";
+  }
+  const preview = $("#uploadPreview");
+  if (preview && target?.type === "room") {
+    if (active) {
+      preview.innerHTML = '<span class="voice-recording-dot"></span><strong>Recording voice message...</strong><button id="stopVoiceRecording" type="button">Stop & send</button>';
+      preview.classList.remove("hidden");
+    } else if (!state.uploadFile) {
+      preview.innerHTML = "";
+      preview.classList.add("hidden");
+    }
+  }
+}
+
+async function toggleVoiceRecording(target) {
+  if (state.voiceRecorder?.state === "recording") {
+    state.voiceRecorder.stop();
+    return;
+  }
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast("Voice messages need microphone access over HTTPS.");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const mimeType = voiceMimeType();
+    const options = { audioBitsPerSecond: 24000 };
+    if (mimeType) options.mimeType = mimeType;
+    const recorder = new MediaRecorder(stream, options);
+    state.voiceRecorder = recorder;
+    state.voiceStream = stream;
+    state.voiceTarget = target;
+    state.voiceChunks = [];
+    recorder.addEventListener("dataavailable", (event) => { if (event.data?.size) state.voiceChunks.push(event.data); });
+    recorder.addEventListener("stop", async () => {
+      clearTimeout(state.voiceStopTimer);
+      const capturedTarget = state.voiceTarget;
+      const chunks = state.voiceChunks.slice();
+      const finalType = recorder.mimeType || mimeType || "audio/webm";
+      state.voiceStream?.getTracks().forEach((track) => track.stop());
+      state.voiceRecorder = null;
+      state.voiceStream = null;
+      state.voiceTarget = null;
+      state.voiceChunks = [];
+      setVoiceRecordingUi(false, capturedTarget);
+      const blob = new Blob(chunks, { type: finalType });
+      if (!blob.size) return toast("No voice audio was captured.");
+      if (blob.size > 4 * 1024 * 1024) return toast("Voice message is too large. Keep it under 60 seconds.");
+      const extension = finalType.includes("ogg") ? "ogg" : finalType.includes("mp4") ? "m4a" : "webm";
+      const form = new FormData();
+      form.append("body", "");
+      form.append("attachment", new File([blob], "voice-" + Date.now() + "." + extension, { type: finalType }));
+      try {
+        if (capturedTarget?.type === "pm") {
+          form.append("receiverId", capturedTarget.userId);
+          const sent = await api("/api/chat/private-messages", { method: "POST", body: form });
+          appendPmMessage(sent);
+        } else {
+          const roomId = capturedTarget?.roomId || state.currentRoomId;
+          const sent = await api("/api/chat/rooms/" + roomId + "/messages", { method: "POST", body: form });
+          if (Number(roomId) === Number(state.currentRoomId) && !state.messages.some((message) => Number(message.id) === Number(sent.id))) {
+            state.messages.push(sent);
+            renderMessages();
+          }
+        }
+        toast("Voice message sent.");
+      } catch (error) {
+        toast(error.message);
+      }
+    }, { once: true });
+    recorder.start(1000);
+    state.voiceStopTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 60000);
+    setVoiceRecordingUi(true, target);
+    toast("Recording... tap Stop & send when you are done.");
+  } catch (error) {
+    state.voiceStream?.getTracks().forEach((track) => track.stop());
+    state.voiceStream = null;
+    state.voiceRecorder = null;
+    toast(error?.name === "NotAllowedError" ? "Microphone permission was not granted." : "Could not start voice recording.");
+  }
+}
+
 function openImageZoom(src) {
   const lightbox = $("#imageLightbox");
   const image = $("#imageLightboxImage");
@@ -648,7 +770,6 @@ async function bootstrap() {
     loadFriends().catch(() => {});
     loadMessages().catch((error) => toast(error.message));
     state.lastSyncAt = Date.now();
-    setTimeout(warmFastViews, 1500);
   })();
   try {
     return await state.bootstrapPromise;
@@ -789,6 +910,15 @@ function parseReactions(raw) {
   }
 }
 
+function messageAttachmentHtml(row, imageClass = "attachment") {
+  const url = row?.attachment_url || row?.attachmentUrl;
+  if (!url) return "";
+  const type = String(row?.attachment_type || row?.attachmentType || "");
+  const voice = type.startsWith("audio/") || type === "video/webm" || /\.(webm|ogg|mp3|m4a)(?:\?|$)/i.test(url);
+  if (voice) return '<audio class="voice-message" controls preload="none" src="' + html(url) + '"></audio>';
+  return '<img class="' + html(imageClass) + ' zoomable-image" data-zoom-src="' + html(url) + '" src="' + html(url) + '" alt="attachment" loading="lazy" decoding="async" />';
+}
+
 function renderMessages() {
   $("#messages").innerHTML = state.messages.map((message) => {
     const user = {
@@ -834,7 +964,7 @@ function renderMessages() {
           </div>
           ${reply ? `<div class="reply-preview"><strong>@${html(reply.username)}</strong><span>${html(String(reply.body || "").slice(0, 90))}</span></div>` : ""}
           <div class="message-body">${renderMessageBody(message.body || "", user)}</div>
-          ${message.attachment_url ? `<img class="attachment zoomable-image" data-zoom-src="${html(message.attachment_url)}" src="${html(message.attachment_url)}" alt="attachment" loading="lazy" decoding="async" />` : ""}
+          ${messageAttachmentHtml(message, "attachment")}
           <div class="badge-grid">${reactions.map((reaction) => `<span class="rank-pill">${html(reaction.emoji)} ${reaction.count}</span>`).join("")}</div>
         </div>
       </article>
@@ -891,18 +1021,37 @@ function renderFunCommandMessage(prefix, payload) {
   }
   if (prefix === stealPrefix) {
     const success = Boolean(payload?.success);
-    return `<div class="town-command-card steal-card ${success ? "command-success" : "command-failed"}"><small>${success ? "Heist successful" : "Heist failed"}</small><strong>${html(payload?.actor || "Someone")} ${success ? `took ${compactNumber(Number(payload?.amount || 0))} gold from` : `paid ${compactNumber(Number(payload?.amount || 0))} gold to`} ${html(payload?.target || "a user")}</strong><span>${html(payload?.line || "TownBot closed the case.")}</span></div>`;
+    return `<div class="town-command-card steal-card ${success ? "command-success" : "command-failed"}"><small>${success ? "Heist successful" : "Caught"}</small><strong>${html(payload?.actor || "Someone")} ${success ? `took ${compactNumber(Number(payload?.amount || 0))} gold from ${html(payload?.target || "a user")}` : "was caught and muted for 1 minute"}</strong><span>${html(payload?.line || "TownBot closed the case.")}</span></div>`;
   }
   if (prefix === huntPrefix) {
     return `<div class="town-command-card hunt-card"><small>Diamond hunt</small><strong>${html(payload?.username || "A hunter")} found ${compactNumber(Number(payload?.reward || 0))} diamonds</strong><span>${html(payload?.line || "The trail paid off.")}</span></div>`;
   }
+  if (prefix === roastPrefix) {
+    return `<div class="town-command-card roast-card"><small>TownBot roast</small><strong>${html(payload?.username || "Someone")} ${html(payload?.roast || "left TownBot speechless.")}</strong><span>Playful damage delivered at random.</span></div>`;
+  }
   return "";
+}
+
+function renderXoMessage(payload) {
+  const type = String(payload?.type || "invite");
+  const gameId = Number(payload?.gameId || 0);
+  if (type === "invite") return `<div class="xo-message-card"><img src="/assets/game-xo.svg" alt="" /><span><small>X-O challenge</small><strong>${html(payload?.host || "A player")} opened a match</strong><em>500 gold stake · winner gains 500</em></span><button data-join-xo="${gameId}" type="button">Join match</button></div>`;
+  if (type === "joined") return `<div class="xo-message-card"><img src="/assets/game-xo.svg" alt="" /><span><small>Match started</small><strong>${html(payload?.host || "Player X")} vs ${html(payload?.guest || "Player O")}</strong><em>X plays first</em></span><button data-open-xo="${gameId}" type="button">Open board</button></div>`;
+  if (type === "won") return `<div class="xo-message-card xo-result-card"><img src="/assets/game-xo.svg" alt="" /><span><small>X-O winner</small><strong>${html(payload?.winner || "The winner")} gains 500 gold</strong><em>The loser drops 500 gold</em></span><button data-open-xo="${gameId}" type="button">View board</button></div>`;
+  return `<div class="xo-message-card xo-result-card"><img src="/assets/game-xo.svg" alt="" /><span><small>X-O draw</small><strong>${html(payload?.host || "Player X")} and ${html(payload?.guest || "Player O")} tied</strong><em>No gold won or lost</em></span><button data-open-xo="${gameId}" type="button">View board</button></div>`;
 }
 
 function renderMessageBody(body, user = {}) {
   if (body.startsWith(betPrefix)) {
     try {
       return renderBetMessage(JSON.parse(body.slice(betPrefix.length))) || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+  if (body.startsWith(xoPrefix)) {
+    try {
+      return renderXoMessage(JSON.parse(body.slice(xoPrefix.length))) || "";
     } catch (_error) {
       return "";
     }
@@ -1057,6 +1206,17 @@ function bindMessageActions() {
     label: `message #${button.dataset.reportMessage}`,
   });
   }));
+  $$("[data-join-xo]", $("#messages")).forEach((button) => button.addEventListener("click", async () => {
+    try {
+      await api("/api/games/xo/" + button.dataset.joinXo + "/join", { method: "POST" });
+      await openXoGame(button.dataset.joinXo);
+    } catch (error) {
+      toast(error.message);
+    }
+  }));
+  $$("[data-open-xo]", $("#messages")).forEach((button) => button.addEventListener("click", () => {
+    openXoGame(button.dataset.openXo).catch((error) => toast(error.message));
+  }));
 }
 
 function quoteMessage(messageId) {
@@ -1078,6 +1238,21 @@ function renderUsers() {
   const onlineBadge = $("#onlineCountBadge");
   if (onlineBadge) onlineBadge.textContent = onlineTotal > 99 ? "99+" : String(onlineTotal);
   if ($("#app")?.classList.contains("right-closed")) return;
+  const searchShell = $("#userSearchShell");
+  searchShell?.classList.toggle("hidden", state.userTab !== "search");
+  if (state.userTab === "search") {
+    const query = String($("#userListSearch")?.value || "").trim().toLowerCase();
+    const matches = query
+      ? state.users.filter((user) => visibleInUserList(user) && `${displayName(user)} ${user.username || ""}`.toLowerCase().includes(query)).slice(0, 60)
+      : [];
+    $("#userList").innerHTML = `
+      <section class="right-user-section user-search-results">
+        <h3>${query ? `${matches.length} result${matches.length === 1 ? "" : "s"}` : "Find a member"}</h3>
+        ${query ? renderUserRows(matches, false) : '<p class="muted compact-empty">Type a username above to search the town.</p>'}
+      </section>`;
+    $$('[data-user-id]', $("#userList")).forEach((button) => button.addEventListener("click", () => openUserActions(Number(button.dataset.userId))));
+    return;
+  }
   const source = (state.userTab === "friends"
     ? state.friends.map((friend) => userById(friend.id) || {
       id: friend.id,
@@ -1108,7 +1283,7 @@ function renderUsers() {
 function renderUserRows(list, offline = false) {
   return list.map((user) => `
     <button class="user-row" data-user-id="${user.id}" type="button">
-      <span class="status status-${html(presenceKey(user.profileStatus))} ${offline ? "offline" : ""}" title="${html(offline ? "Offline" : (user.profileStatus || "Online"))}"></span>
+      <span class="status status-${html(presenceKey(user.profileStatus))} ${offline || !isOnline(user) ? "offline" : ""}" title="${html(offline || !isOnline(user) ? "Offline" : (user.profileStatus || "Online"))}"></span>
       ${framedAvatar(user)}
       <span><strong>${html(user.username)}</strong><small>${userRankBadge(user)}${!offline && user.profileStatus && user.profileStatus !== "Online" ? `<em class="user-presence-label">${html(user.profileStatus)}</em>` : ""}</small></span>
     </button>
@@ -1129,27 +1304,135 @@ function renderProfiles() {
 }
 
 function renderVip() {
-  const plans = [
-    ["7d", "7 Days", "50 diamonds", "1,000 gold"],
-    ["1m", "1 Month", "100 diamonds", "5,000 gold"],
-    ["3m", "3 Months", "200 diamonds", "10,000 gold"],
-    ["lifetime", "Lifetime", "1,000 diamonds", "25,000 gold"],
-  ];
-  $("#vipGrid").innerHTML = plans.map(([code, title, diamonds, gold]) => `
-    <article class="vip-card svip-plan-card">
-      <span class="svip-shine">S-VIP</span>
-      <h3>${title}</h3>
-      <p>Unlock gradient style, GIF banner access, and S-VIP presence.</p>
-      <div class="plan-price"><strong>${diamonds}</strong><span>${gold}</span></div>
-      <button class="primary" data-buy-svip="${code}" type="button">Buy ${title}</button>
-    </article>
-  `).join("");
-  $$("[data-buy-svip]").forEach((button) => button.addEventListener("click", async () => {
-    await api("/api/social/memberships/svip", { method: "POST", body: JSON.stringify({ plan: button.dataset.buySvip }) });
-    toast("S-VIP activated.");
-    await bootstrap();
-    setView("vip");
+  const ranks = Object.keys(rankShopCatalog);
+  if (!rankShopCatalog[state.selectedRank]) state.selectedRank = "s-vip";
+  const selected = rankShopCatalog[state.selectedRank];
+  const currentRank = state.me?.rank || "user";
+  const currentPower = rankOrder.indexOf(currentRank);
+  const selectedPower = rankOrder.indexOf(state.selectedRank);
+  const activePlan = state.me?.rankPlan;
+  const activeUntil = state.me?.rankUntil && new Date(state.me.rankUntil) > new Date();
+  const globallyBlocked = currentPower >= rankOrder.indexOf("premium") || currentPower > selectedPower;
+  const wallet = $("#rankShopWallet");
+  if (wallet) wallet.innerHTML = '<span><img src="/assets/currency-gold.png" alt="" /><strong>' + compactNumber(state.me?.gold || 0) + '</strong><small>Gold</small></span><span><img src="/assets/currency-diamond.png" alt="" /><strong>' + compactNumber(state.me?.diamonds || 0) + '</strong><small>Diamonds</small></span><em>Current: ' + userRankBadge(state.me) + '</em>';
+  $("#rankSelector").innerHTML = ranks.map((rank) => {
+    const item = rankShopCatalog[rank];
+    return '<button class="rank-choice rank-choice-' + rank + (state.selectedRank === rank ? ' active' : '') + '" data-select-rank="' + rank + '" type="button"><img src="/assets/badge-' + rank + '.svg" alt="" /><span><strong>' + item.name + '</strong><small>' + item.tagline + '</small></span></button>';
+  }).join("");
+  $("#vipGrid").innerHTML = Object.entries(selected.plans).map(([code, price]) => {
+    const sameActiveRank = currentRank === state.selectedRank && activeUntil;
+    const samePermanentRank = currentRank === state.selectedRank && !activeUntil;
+    const repeatedPlan = sameActiveRank && activePlan === code;
+    const shorterPlan = sameActiveRank && rankPlanPower[code] <= rankPlanPower[activePlan];
+    const disabled = globallyBlocked || samePermanentRank || repeatedPlan || shorterPlan;
+    const reason = currentPower >= rankOrder.indexOf("premium")
+      ? "Premium and staff ranks cannot buy ranks"
+      : currentPower > selectedPower
+        ? "This rank is below your current rank"
+        : samePermanentRank
+          ? "You already have this rank"
+        : repeatedPlan
+          ? "This plan is already active"
+          : shorterPlan ? "Choose a longer period" : "";
+    return '<article class="vip-card rank-plan-card"><span class="rank-plan-icon"><img src="/assets/badge-' + state.selectedRank + '.svg" alt="" /></span><small>' + selected.name + ' plan</small><h3>' + rankPlanLabels[code] + '</h3><div class="plan-price"><strong><img src="/assets/currency-diamond.png" alt="" />' + compactNumber(price[0]) + ' diamonds</strong><span><img src="/assets/currency-gold.png" alt="" />' + compactNumber(price[1]) + ' gold</span></div>' + (reason ? '<p class="rank-plan-reason">' + reason + '</p>' : '<p>Rank art, badge, profile tools, and upgraded presence.</p>') + '<button class="primary" data-buy-rank="' + state.selectedRank + '" data-rank-plan="' + code + '" type="button" ' + (disabled ? "disabled" : "") + '>' + (disabled ? "Unavailable" : "Buy " + rankPlanLabels[code]) + '</button></article>';
+  }).join("");
+  $$("[data-select-rank]").forEach((button) => button.addEventListener("click", () => {
+    state.selectedRank = button.dataset.selectRank;
+    renderVip();
   }));
+  $$("[data-buy-rank]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const result = await api("/api/social/memberships/rank", { method: "POST", body: JSON.stringify({ rank: button.dataset.buyRank, plan: button.dataset.rankPlan }) });
+      toast(result.rank.toUpperCase() + " activated for " + result.plan + ".");
+      state.storeCache = null;
+      await bootstrap();
+      setView("vip");
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+    }
+  }));
+}
+
+function xoStatusText(game) {
+  if (game.status === "waiting") return "Waiting for an opponent";
+  if (game.status === "draw") return "Draw · no gold won or lost";
+  if (game.status === "won") return (game.winner_name || "Winner") + " won 500 gold";
+  return Number(game.turn_user_id) === Number(state.me?.id) ? "Your turn" : "Opponent\'s turn";
+}
+
+function paintXoGame(game) {
+  const root = $("#gamesHub");
+  if (!root || !game) return;
+  state.activeXoGameId = Number(game.id);
+  const board = String(game.board || "---------").padEnd(9, "-").slice(0, 9).split("");
+  const isHost = Number(game.host_id) === Number(state.me?.id);
+  const isGuest = Number(game.guest_id) === Number(state.me?.id);
+  const myTurn = game.status === "playing" && Number(game.turn_user_id) === Number(state.me?.id);
+  root.innerHTML = '<section class="xo-arena"><div class="xo-arena-head"><button data-back-games type="button">← Games</button><span><small>500 gold match</small><h3>' + html(game.host_name || "Player X") + ' <b>vs</b> ' + html(game.guest_name || "Waiting...") + '</h3></span><img src="/assets/game-xo.svg" alt="" /></div><div class="xo-score-strip"><span><b>X</b>' + html(game.host_name || "Player X") + '</span><strong>' + html(xoStatusText(game)) + '</strong><span><b>O</b>' + html(game.guest_name || "Open seat") + '</span></div><div class="xo-board">' + board.map((cell, index) => '<button data-xo-cell="' + index + '" class="xo-cell ' + (cell !== "-" ? "played" : "") + '" type="button" ' + (!myTurn || cell !== "-" ? "disabled" : "") + '>' + (cell === "-" ? "" : cell) + '</button>').join("") + '</div><div class="xo-arena-actions">' + (game.status === "waiting" && !isHost ? '<button class="primary" data-join-current-xo type="button">Join for 500 gold</button>' : "") + (game.status === "waiting" && isHost ? '<p>Your join button is now visible in the room. The stake is charged only when someone joins.</p>' : "") + (!isHost && !isGuest && game.status !== "waiting" ? '<p>This match belongs to its two players.</p>' : "") + '</div></section>';
+  if (game.status === "playing" && (isHost || isGuest)) {
+    $(".xo-arena-actions", root)?.insertAdjacentHTML("beforeend", '<button class="xo-forfeit-button" data-forfeit-xo type="button">Forfeit match · lose 500 gold</button>');
+  }
+  $("[data-back-games]", root)?.addEventListener("click", () => renderGames().catch((error) => toast(error.message)));
+  $("[data-join-current-xo]", root)?.addEventListener("click", async () => {
+    try {
+      const joined = await api("/api/games/xo/" + game.id + "/join", { method: "POST" });
+      paintXoGame(joined);
+    } catch (error) { toast(error.message); }
+  });
+  $("[data-forfeit-xo]", root)?.addEventListener("click", async () => {
+    if (!confirm("Forfeit this X-O match? Your opponent will win the 500 gold stake.")) return;
+    try {
+      const updated = await api("/api/games/xo/" + game.id + "/forfeit", { method: "POST" });
+      paintXoGame(updated);
+      refreshUsersLight().catch(() => {});
+    } catch (error) { toast(error.message); }
+  });
+  $$("[data-xo-cell]", root).forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const updated = await api("/api/games/xo/" + game.id + "/move", { method: "POST", body: JSON.stringify({ cell: Number(button.dataset.xoCell) }) });
+      paintXoGame(updated);
+      if (updated.status !== "playing") refreshUsersLight().catch(() => {});
+    } catch (error) {
+      toast(error.message);
+      openXoGame(game.id).catch(() => {});
+    }
+  }));
+}
+
+async function openXoGame(gameId) {
+  state.activeXoGameId = Number(gameId);
+  setView("games");
+  const root = $("#gamesHub");
+  if (root) root.innerHTML = '<div class="view-loading"><span></span><strong>Opening X-O board...</strong></div>';
+  const game = await api("/api/games/xo/" + Number(gameId));
+  paintXoGame(game);
+}
+
+async function renderGames() {
+  const root = $("#gamesHub");
+  if (!root) return;
+  state.activeXoGameId = null;
+  root.innerHTML = '<div class="view-loading"><span></span><strong>Opening games...</strong></div>';
+  const data = await api("/api/games/xo?roomId=" + Number(state.currentRoomId || 0));
+  const games = data.games || [];
+  root.innerHTML = '<section class="game-feature-card"><div class="game-feature-art"><img src="/assets/game-xo.svg" alt="" /></div><div><span class="eyebrow">Quick match</span><h3>X-O</h3><p>Start a match and TownBot posts a join button in the room. Each player stakes 500 gold. Winner gains 500, loser drops 500, and a draw refunds both.</p><button class="primary" id="startXoGame" type="button">Start X-O match</button></div></section><section class="game-open-list"><div class="pm-section-title"><span>Open & active matches</span><small>' + (games.length || "none") + '</small></div>' + games.map((game) => '<button class="game-match-row" data-game-id="' + game.id + '" type="button"><img src="/assets/game-xo.svg" alt="" /><span><strong>' + html(game.host_name || "Player X") + (game.guest_name ? " vs " + html(game.guest_name) : " is waiting") + '</strong><small>' + html(xoStatusText(game)) + '</small></span><em>' + (game.status === "waiting" ? "Join" : "Open") + '</em></button>').join("") + (games.length ? "" : '<div class="pm-empty"><strong>No X-O matches yet</strong><span>Start one and invite the room.</span></div>') + '</section>';
+  $("#startXoGame")?.addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      const game = await api("/api/games/xo", { method: "POST", body: JSON.stringify({ roomId: state.currentRoomId }) });
+      paintXoGame(game);
+      toast("X-O join button sent to the room.");
+    } catch (error) {
+      toast(error.message);
+      event.currentTarget.disabled = false;
+    }
+  });
+  $$("[data-game-id]", root).forEach((button) => button.addEventListener("click", () => openXoGame(button.dataset.gameId).catch((error) => toast(error.message))));
 }
 
 async function renderChatStore({ force = false } = {}) {
@@ -1158,12 +1441,12 @@ async function renderChatStore({ force = false } = {}) {
   const fallback = {
     gold: Number(state.me?.gold || 0),
     diamonds: Number(state.me?.diamonds || 0),
-    free: state.me?.rank === "premium",
+    free: ["premium", "admin", "developer"].includes(state.me?.rank),
     rank: state.me?.rank,
     selectedFrame: state.me?.frame || "clean",
     owned: {
-      profileMusic: state.me?.rank === "premium" || Boolean(state.me?.profileMusicUrl),
-      profileFrames: state.me?.rank === "premium" || Boolean(profileFrame(state.me)),
+      profileMusic: ["premium", "admin", "developer"].includes(state.me?.rank) || Boolean(state.me?.profileMusicUrl),
+      profileFrames: ["premium", "admin", "developer"].includes(state.me?.rank) || Boolean(profileFrame(state.me)),
     },
   };
   paintChatStore(state.storeCache || fallback);
@@ -1195,12 +1478,15 @@ function paintChatStore(data) {
   const root = $("#chatStore");
   if (!root) return;
   const frames = [
+    ["clean", "No Frame", "Use your profile photo without an overlay"],
     ["cosmic", "Cosmic Halo", "Violet starlight and cyan moon shards"],
     ["solar", "Solar Crown", "Antique gold with warm amber crystal"],
     ["prism", "Cyber Prism", "Gunmetal with cyan-magenta facets"],
     ["gothic", "Gothic Night", "Obsidian cathedral lines and crimson gems"],
     ["angelic", "Angelic Calm", "Pearl white feathers and pale blue light"],
     ["classic-gold", "Classic Gold", "Champagne gold, black enamel and diamonds"],
+    ["royal-laurel", "Royal Laurel", "Golden wings, crown, and emerald details"],
+    ["sun-throne", "Sun Throne", "Regal sun crest with polished gold leaves"],
   ];
   root.innerHTML = `
     <div class="store-wallet-row">
@@ -1215,26 +1501,26 @@ function paintChatStore(data) {
           <p>Upload one MP3 under 10 MB. It is fetched only when someone opens your profile.</p>
           ${storePrice(data, "gold", 2000)}
           <button class="primary" data-store-music type="button">${data.owned.profileMusic ? (state.me.profileMusicUrl ? "Change MP3" : "Upload MP3") : "Unlock Profile Music"}</button>
-          <input class="hidden" id="profileMusicUpload" type="file" accept=".mp3,audio/mpeg" />
+          <input class="hidden" id="storeProfileMusicUpload" type="file" accept=".mp3,audio/mpeg" />
         </div>
       </article>
       <article class="store-item-card frame-store-card">
         <div class="store-item-copy">
           <div><span class="eyebrow">Avatar upgrade</span><h3>Profile Frame Collection</h3></div>
-          <p>Unlock all six frames, then switch between them whenever you want.</p>
+          <p>Unlock all eight frames, switch anytime, or remove the frame completely.</p>
           ${storePrice(data, "diamonds", 100)}
         </div>
         ${data.owned.profileFrames && state.framePickerOpen ? `
           <div class="store-frame-grid">
             ${frames.map(([code, title, description]) => `
               <button class="store-frame-choice ${data.selectedFrame === code ? "active" : ""}" data-select-store-frame="${code}" type="button">
-                <span class="store-frame-preview" style="--store-frame:url('${profileFrameAssets[code]}')"><img src="${html(avatar(state.me))}" alt="" /></span>
+                <span class="store-frame-preview ${code === "clean" ? "clean" : ""}" style="--store-frame:url('${profileFrameAssets[code] || ""}')"><img src="${html(avatar(state.me))}" alt="" /></span>
                 <strong>${title}</strong><small>${description}</small>
               </button>
             `).join("")}
           </div>
         ` : data.owned.profileFrames
-          ? '<button class="primary store-unlock-button" data-proceed-frames type="button">Proceed</button>'
+          ? '<div class="store-frame-actions"><button class="primary store-unlock-button" data-proceed-frames type="button">Proceed</button><button data-select-store-frame="clean" type="button">Remove frame</button></div>'
           : '<button class="primary store-unlock-button" data-unlock-frames type="button">Unlock All Frames</button>'}
       </article>
     </div>
@@ -1250,14 +1536,14 @@ function paintChatStore(data) {
         persistStoreCache();
         paintChatStore(state.storeCache);
       }
-      $("#profileMusicUpload")?.click();
+      $("#storeProfileMusicUpload")?.click();
     } catch (error) {
       toast(error.message);
     } finally {
       if (button.isConnected) button.disabled = false;
     }
   });
-  $("#profileMusicUpload", root)?.addEventListener("change", async (event) => {
+  $("#storeProfileMusicUpload", root)?.addEventListener("change", async (event) => {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
     if (!/\.mp3$/i.test(file.name) || !["audio/mpeg", "audio/mp3", ""].includes(file.type)) return toast("Choose an MP3 file.");
@@ -1307,7 +1593,7 @@ function paintChatStore(data) {
       renderProfiles();
       renderMessages();
       paintChatStore(state.storeCache);
-      toast("Profile frame selected.");
+      toast(frame === "clean" ? "Profile frame removed." : "Profile frame selected.");
     } catch (error) {
       toast(error.message);
     }
@@ -2512,7 +2798,7 @@ function openProfileEditor(section = "edit") {
     $("#bioCount").textContent = `${form.bio.value.length}/120`;
     $$("[data-accent]").forEach((button) => button.classList.toggle("active", button.dataset.accent === form.profileAccent.value));
   }
-  $("#editProfileModal").showModal();
+  if (!$("#editProfileModal").open) $("#editProfileModal").showModal();
   if (form) form.scrollTop = 0;
   loadEditProfileGallery().catch((error) => {
     const grid = $("#editGalleryGrid");
@@ -2804,6 +3090,7 @@ function openPm(userId, fallbackUser = null) {
         <span><strong>${html(displayName(user))}</strong><small>${userRankBadge(user)}</small></span>
         <span class="pm-head-actions">
           <button class="pm-head-action" data-pm-inbox type="button" title="Back to private messages">Inbox</button>
+          <button class="pm-head-action" data-pm-tag type="button" title="Tag this user">Tag</button>
           <button class="pm-head-action" data-view-profile="${user.id}" type="button" title="View profile">View</button>
         </span>
       </div>
@@ -2815,6 +3102,7 @@ function openPm(userId, fallbackUser = null) {
           <button class="composer-icon" id="pmEmojiButton" type="button" title="Emoji"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM8 9.5a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm8 0a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm-4 7.2c-2.2 0-4-1.2-5-3h10c-1 1.8-2.8 3-5 3Z"/></svg></button>
           <input id="pmInput" placeholder="Type here.." autocomplete="off" autocorrect="off" spellcheck="false" />
           <button class="composer-icon" id="pmUploadButton" type="button" title="Send image"><svg viewBox="0 0 24 24"><path d="M5 5h3l1.5-2h5L16 5h3a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Zm7 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0-2.2a2.8 2.8 0 1 1 0-5.6 2.8 2.8 0 0 1 0 5.6Z"/></svg></button>
+          <button class="composer-icon" id="pmVoiceButton" type="button" title="Voice message"><svg viewBox="0 0 24 24"><path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4Zm7-4a7 7 0 0 1-6 6.9V21h3v2H8v-2h3v-3.1A7 7 0 0 1 5 11h2a5 5 0 0 0 10 0h2Z"/></svg></button>
           <button class="send icon-send" type="submit" title="Send"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l13 2-13 2z"/></svg></button>
         </form>
       </div>
@@ -2826,6 +3114,7 @@ function openPm(userId, fallbackUser = null) {
   });
   $("#pmEmojiButton").addEventListener("click", (event) => openEmojiPicker("#pmInput", event.currentTarget));
   $("#pmUploadButton").addEventListener("click", () => $("#pmAttachment").click());
+  $("#pmVoiceButton").addEventListener("click", () => toggleVoiceRecording({ type: "pm", userId: numericUserId }));
   $("#pmAttachment").addEventListener("change", () => {
     state.pmUploadFile = $("#pmAttachment").files[0];
     if (!state.pmUploadFile) return;
@@ -2835,6 +3124,13 @@ function openPm(userId, fallbackUser = null) {
   $("[data-pm-inbox]", $("#drawerBody")).addEventListener("click", () => {
     state.activePmUserId = null;
     openPmConversations().catch((error) => toast(error.message));
+  });
+  $("[data-pm-tag]", $("#drawerBody")).addEventListener("click", () => {
+    const input = $("#pmInput");
+    const tag = "@" + (user.username || displayName(user));
+    if (!input.value.toLowerCase().includes(tag.toLowerCase())) input.value = (tag + " " + input.value).trimEnd();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
   });
   bindUserActionButtons(numericUserId);
   $("#pmForm").addEventListener("submit", async (event) => {
@@ -2878,8 +3174,8 @@ function pmMessageHtml(row) {
   return `
     <div class="pm-message ${own ? "own" : ""}" data-pm-message-id="${html(row.id || "")}">
       <span><strong>${html(sender)}</strong><small>${formatTime(createdAt)}${row.read_at ? " | seen" : ""}</small></span>
-      ${row.body ? `<p>${html(row.body)}</p>` : ""}
-      ${attachment ? `<img class="pm-attachment zoomable-image" data-zoom-src="${html(attachment)}" src="${html(attachment)}" alt="Private message attachment" loading="lazy" decoding="async" />` : ""}
+      ${row.body ? `<p>${renderMessageBody(String(row.body), {})}</p>` : ""}
+      ${messageAttachmentHtml(row, "pm-attachment")}
     </div>
   `;
 }
@@ -3248,6 +3544,14 @@ const realtimeHandlers = {
   "intruder-settings-updated"() {
     if ($("#adminView").classList.contains("active")) renderAdmin().catch((error) => toast(error.message));
   },
+  "xo-game"(data = {}) {
+    if (!$("#gamesView").classList.contains("active")) return;
+    if (state.activeXoGameId && Number(state.activeXoGameId) === Number(data.gameId)) {
+      openXoGame(data.gameId).catch(() => {});
+    } else {
+      renderGames().catch(() => {});
+    }
+  },
   "message-updated"(data = {}) {
     const message = state.messages.find((item) => Number(item.id) === Number(data.id));
     if (message) message.body = data.body;
@@ -3299,6 +3603,7 @@ const realtimeHandlers = {
 function connectEventSourceFallback() {
   if (state.eventSource) return;
   state.eventSource = new EventSource(`/api/chat/events?token=${encodeURIComponent(state.token)}`);
+  state.eventSource.onopen = () => { state.eventRetryMs = 1500; };
   Object.entries(realtimeHandlers).forEach(([eventName, handler]) => {
     state.eventSource.addEventListener(eventName, (event) => {
       const data = event.data ? JSON.parse(event.data) : {};
@@ -3308,15 +3613,21 @@ function connectEventSourceFallback() {
   state.eventSource.onerror = () => {
     state.eventSource?.close();
     state.eventSource = null;
+    const retryAfter = state.eventRetryMs;
+    state.eventRetryMs = Math.min(15000, Math.round(state.eventRetryMs * 1.8));
     setTimeout(() => {
       if (state.token && !state.socket && !state.eventSource) connectEvents();
-    }, 1500);
+    }, retryAfter);
     if (!document.hidden && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
   };
 }
 
 function connectEvents() {
   if (state.socket || state.eventSource) return;
+  if (state.preferEventSource) {
+    connectEventSourceFallback();
+    return;
+  }
   if (window.io) {
     state.socket = window.io({
       auth: { token: state.token },
@@ -3338,6 +3649,7 @@ function connectEvents() {
     });
     state.socket.on("connect_error", (error) => {
       console.warn("Socket connection failed; using fallback event stream.", error.message);
+      state.preferEventSource = true;
       state.socket?.disconnect();
       state.socket = null;
       connectEventSourceFallback();
@@ -3589,7 +3901,14 @@ function bindEvents() {
       state.activePmUserId = null;
     }
   });
-  $$("[data-user-tab]").forEach((button) => button.addEventListener("click", () => { state.userTab = button.dataset.userTab; $$("[data-user-tab]").forEach((b) => b.classList.remove("active")); button.classList.add("active"); renderUsers(); }));
+  $$("[data-user-tab]").forEach((button) => button.addEventListener("click", () => {
+    state.userTab = button.dataset.userTab;
+    $$("[data-user-tab]").forEach((b) => b.classList.remove("active"));
+    button.classList.add("active");
+    renderUsers();
+    if (state.userTab === "search") $("#userListSearch")?.focus();
+  }));
+  $("#userListSearch")?.addEventListener("input", renderUsers);
 
   $("#messageForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3715,13 +4034,14 @@ function bindEvents() {
   });
   $("#composerVoiceAction").addEventListener("click", () => {
     closeComposerTools();
-    toast("Voice recording needs HTTPS permission before microphone capture can start.");
+    toggleVoiceRecording({ type: "room", roomId: state.currentRoomId });
   });
   $("#messageAttachment").addEventListener("change", () => {
     selectMessageAttachment($("#messageAttachment").files[0]);
   });
   $("#uploadPreview").addEventListener("click", (event) => {
     if (event.target.closest("#removeMessageAttachment")) clearMessageAttachment();
+    if (event.target.closest("#stopVoiceRecording")) toggleVoiceRecording(state.voiceTarget);
   });
   window.addEventListener("resize", syncResponsiveLayout);
   $("#avatarUpload").addEventListener("change", () => {
