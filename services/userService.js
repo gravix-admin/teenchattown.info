@@ -13,6 +13,7 @@ function publicUser(user, viewer = null) {
   if (!user) return null;
   const self = viewer && Number(viewer.id) === Number(user.id);
   const staffViewer = viewer && ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(viewer.rank_name);
+  const sharesOnlineStatus = Number(user.show_online_status ?? 1) === 1;
   return {
     id: user.id,
     username: user.username,
@@ -27,7 +28,7 @@ function publicUser(user, viewer = null) {
     animatedBannerUrl: user.animated_banner_url,
     profileMusicUrl: user.profile_music_url,
     profileTitle: user.profile_title,
-    profileStatus: user.profile_status,
+    profileStatus: self || sharesOnlineStatus ? user.profile_status : undefined,
     profileAccent: user.profile_accent,
     showOnlineStatus: Boolean(user.show_online_status),
     showCountry: Boolean(Number(user.show_country ?? 1)),
@@ -56,7 +57,7 @@ function publicUser(user, viewer = null) {
     kickedUntil: self || staffViewer ? user.kicked_until : undefined,
     bannedUntil: self || staffViewer ? user.banned_until : undefined,
     deleteRequestedAt: user.delete_requested_at,
-    lastSeen: user.last_seen,
+    lastSeen: self || sharesOnlineStatus ? user.last_seen : undefined,
     online: user.show_online_status === 0 || user.profile_status === "Invisible" ? false : Boolean(Number(user.is_online || 0) && user.last_seen && Date.now() - new Date(user.last_seen).getTime() < 70 * 1000),
     createdAt: user.created_at,
   };

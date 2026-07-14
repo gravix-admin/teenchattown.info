@@ -641,6 +641,7 @@ html.returning-user #authScreen { display: none; }
   text-align: left;
 }
 .message-menu button:hover { background: rgba(255,255,255,.1); }
+.message-menu.open-up { top: auto; bottom: 34px; }
 .message-card img.attachment { width: min(340px, 100%); max-height: 280px; border-radius: 14px; object-fit: cover; }
 .zoomable-image { cursor: zoom-in; }
 .poll-card {

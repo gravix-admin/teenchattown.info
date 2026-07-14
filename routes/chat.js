@@ -324,26 +324,20 @@ router.delete("/rooms/:roomId", requireAuth, async (req, res) => {
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
   if (String(room.name).toLowerCase() === "main room") return res.status(400).json({ error: "Main Room cannot be deleted." });
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    await connection.query("DELETE mr FROM message_reactions mr JOIN messages m ON m.id = mr.message_id WHERE m.room_id = ?", [room.id]);
-    await connection.query("DELETE FROM messages WHERE room_id = ?", [room.id]);
-    await connection.query("DELETE FROM room_access WHERE room_id = ?", [room.id]);
-    await connection.query("DELETE FROM xo_games WHERE room_id = ?", [room.id]);
-    await connection.query("UPDATE reports SET room_id = NULL WHERE room_id = ?", [room.id]).catch(() => {});
-    await connection.query("DELETE FROM rooms WHERE id = ?", [room.id]);
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback().catch(() => {});
-    throw error;
-  } finally {
-    connection.release();
-  }
+  await pool.query("DELETE FROM rooms WHERE id = ?", [room.id]);
   roomCache.clear();
   clearRoomMessageCache(room.id);
   broadcast("rooms-changed", { id: room.id, deleted: true });
   res.json({ ok: true });
+  (async () => {
+    await pool.query("DELETE mr FROM message_reactions mr JOIN messages m ON m.id = mr.message_id WHERE m.room_id = ?", [room.id]);
+    await Promise.all([
+      pool.query("DELETE FROM messages WHERE room_id = ?", [room.id]),
+      pool.query("DELETE FROM room_access WHERE room_id = ?", [room.id]),
+      pool.query("DELETE FROM xo_games WHERE room_id = ?", [room.id]),
+      pool.query("UPDATE reports SET room_id = NULL WHERE room_id = ?", [room.id]),
+    ]);
+  })().catch((error) => console.error("[room cleanup] failed:", error.message));
 });
 
 router.post("/rooms/:roomId/join", requireAuth, async (req, res) => {

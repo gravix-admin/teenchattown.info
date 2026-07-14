@@ -61,6 +61,23 @@ async function log(actorId, action, targetType, targetId, details = "") {
 
 router.use(requireAuth);
 
+router.get("/tools/summary", async (req, res) => {
+  const canOpenTools = req.user.rank_name === "developer" || await permission(req.user, "postNews");
+  if (!canOpenTools) return res.status(403).json({ error: "Chief or developer access required." });
+  const [chiefAccess] = req.user.rank_name === "developer"
+    ? await pool.query("SELECT tool, allowed FROM role_permissions WHERE rank_name = 'chief' AND tool IN ('intruderTool', 'profileEditTool')")
+    : [[]];
+  const intruderAccess = await specialToolAccess(req.user, "intruderTool");
+  res.set("Cache-Control", "private, no-store");
+  res.json({
+    tools: intruderAccess ? await getIntruderState() : null,
+    toolAccess: {
+      intruderTool: Boolean(Number(chiefAccess.find((row) => row.tool === "intruderTool")?.allowed || 0)),
+      profileEditTool: Boolean(Number(chiefAccess.find((row) => row.tool === "profileEditTool")?.allowed || 0)),
+    },
+  });
+});
+
 router.get("/dashboard", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
   const [permissions] = await pool.query("SELECT * FROM role_permissions");

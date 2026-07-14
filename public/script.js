@@ -102,6 +102,8 @@ const state = {
   voiceTarget: null,
   preferEventSource: false,
   eventRetryMs: 1500,
+  toolsCache: null,
+  toolsCacheAt: 0,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -187,7 +189,9 @@ function api(path, options = {}) {
   const method = String(options.method || "GET").toUpperCase();
   const getKey = `${path}|${options.cache || "default"}`;
   if (method === "GET" && state.inflightGets.has(getKey)) return state.inflightGets.get(getKey);
-  const request = fetch(path, { ...options, headers }).then(async (response) => {
+  const timeoutController = options.signal ? null : new AbortController();
+  const timeout = timeoutController ? setTimeout(() => timeoutController.abort(), method === "GET" ? 25000 : 30000) : null;
+  const request = fetch(path, { ...options, headers, signal: options.signal || timeoutController?.signal }).then(async (response) => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(data.error || "Request failed");
@@ -198,7 +202,10 @@ function api(path, options = {}) {
       throw error;
     }
     return data;
-  });
+  }).catch((error) => {
+    if (error.name === "AbortError") throw new Error("Request timed out. Please try again.");
+    throw error;
+  }).finally(() => clearTimeout(timeout));
   if (method === "GET") {
     state.inflightGets.set(getKey, request);
     request.then(() => state.inflightGets.delete(getKey), () => state.inflightGets.delete(getKey));
@@ -913,14 +920,51 @@ function openRoomManager(roomId) {
   if (!room) return;
   const mainRoom = String(room.name).toLowerCase() === "main room";
   $("#userActionBody").innerHTML = `<div class="staff-card"><span class="eyebrow">Room controls</span><h2>${html(room.name)}</h2><p class="muted">Pin it near the top of the gallery or permanently remove it.</p><div class="modal-action-row"><button data-room-pin type="button">${Number(room.is_pinned) ? "Unpin room" : "Pin room"}</button>${mainRoom ? "" : '<button class="danger-action" data-room-delete type="button">Delete room</button>'}</div></div>`;
-  $("[data-room-pin]")?.addEventListener("click", async () => {
-    await api(`/api/chat/rooms/${room.id}/pin`, { method: "PATCH", body: JSON.stringify({ pinned: !Number(room.is_pinned) }) });
-    $("#userActionModal").close();
+  $("[data-room-pin]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const nextPinned = !Number(room.is_pinned);
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = nextPinned ? "Pinning..." : "Unpinning...";
+    try {
+      const result = await api(`/api/chat/rooms/${room.id}/pin`, { method: "PATCH", body: JSON.stringify({ pinned: nextPinned }) });
+      room.is_pinned = result.pinned ? 1 : 0;
+      state.rooms.sort((a, b) => {
+        const aMain = String(a.name).toLowerCase() === "main room" ? 1 : 0;
+        const bMain = String(b.name).toLowerCase() === "main room" ? 1 : 0;
+        return bMain - aMain || Number(b.is_pinned) - Number(a.is_pinned) || String(a.name).localeCompare(String(b.name));
+      });
+      renderRooms();
+      $("#userActionModal").close();
+      toast(result.pinned ? "Room pinned." : "Room unpinned.");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = originalText;
+      toast(error.message);
+    }
   });
-  $("[data-room-delete]")?.addEventListener("click", async () => {
+  $("[data-room-delete]")?.addEventListener("click", async (event) => {
     if (!confirm(`Delete ${room.name}? Its messages and X-O matches will be removed permanently.`)) return;
-    await api(`/api/chat/rooms/${room.id}`, { method: "DELETE" });
-    $("#userActionModal").close();
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Deleting...";
+    try {
+      await api(`/api/chat/rooms/${room.id}`, { method: "DELETE" });
+      state.rooms = state.rooms.filter((item) => Number(item.id) !== Number(room.id));
+      if (Number(state.currentRoomId) === Number(room.id)) {
+        state.currentRoomId = state.rooms.find((item) => String(item.name).toLowerCase() === "main room")?.id || state.rooms[0]?.id || null;
+        localStorage.setItem("tct_current_room_id", String(state.currentRoomId || ""));
+        state.messages = [];
+        if (state.currentRoomId) loadMessages().catch((error) => toast(error.message));
+      }
+      renderRooms();
+      $("#userActionModal").close();
+      toast("Room deleted.");
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Delete room";
+      toast(error.message);
+    }
   });
   if (!$("#userActionModal").open) $("#userActionModal").showModal();
 }
@@ -1206,7 +1250,10 @@ function renderMessageBody(body, user = {}) {
 }
 
 function closeMessageMenus() {
-  $$(".message-menu").forEach((menu) => menu.classList.add("hidden"));
+  $$(".message-menu").forEach((menu) => {
+    menu.classList.add("hidden");
+    menu.classList.remove("open-up");
+  });
   $$(".message.menu-open").forEach((message) => message.classList.remove("menu-open"));
 }
 
@@ -1237,6 +1284,11 @@ function bindMessageActions(root = $("#messages")) {
     closeMessageMenus();
     menu.classList.toggle("hidden", !wasHidden);
     button.closest(".message")?.classList.toggle("menu-open", wasHidden);
+    if (wasHidden) {
+      const viewport = $("#messages")?.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      menu.classList.toggle("open-up", Boolean(viewport && menuRect.bottom > viewport.bottom - 8));
+    }
   }));
   $$(".message-menu", root).forEach((menu) => menu.addEventListener("click", () => closeMessageMenus()));
   $$(".message-card", root).forEach((card) => {
@@ -2305,14 +2357,13 @@ function compactNumber(value) {
 }
 
 function profileOverviewPanel(user) {
-  const details = [
-    ["Status", user.profileStatus || "Online"],
-    ["Gender", user.gender || "Hidden"],
-    ["Age", user.age ? `${user.age} years` : "Hidden"],
-    ["Country", user.country || "Hidden"],
-    ["Last online", formatFullDateTime(user.lastSeen)],
-    ["Member since", formatDate(user.createdAt)],
-  ];
+  const details = [];
+  if (user.showOnlineStatus !== false && user.profileStatus) details.push(["Status", user.profileStatus]);
+  if (user.showGender !== false && user.gender) details.push(["Gender", user.gender]);
+  if (user.showAge !== false && user.age) details.push(["Age", `${user.age} years`]);
+  if (user.showCountry !== false && user.country) details.push(["Country", user.country]);
+  if (user.showOnlineStatus !== false && user.lastSeen) details.push(["Last online", formatFullDateTime(user.lastSeen)]);
+  details.push(["Member since", formatDate(user.createdAt)]);
   return `
     <div class="profile-detail-bubbles">
       ${details.map(([label, value]) => `<article><span>${html(label)}</span><strong>${html(value)}</strong></article>`).join("")}
@@ -2759,14 +2810,17 @@ function openUserActionPanel(userId) {
   showDrawer();
 }
 
-async function openDeveloperToolsPanel() {
+async function openDeveloperToolsPanel({ force = false } = {}) {
   if (!canManageNews()) return toast("Chief or developer access required.");
   setDrawerChrome({ title: "Staff tools" });
   $("#drawerBody").innerHTML = '<p class="muted">Loading tools...</p>';
   showDrawer();
   let data;
   try {
-    data = await api("/api/admin/dashboard");
+    const cached = !force && state.toolsCache && Date.now() - state.toolsCacheAt < 30000;
+    data = cached ? state.toolsCache : await api("/api/admin/tools/summary", force ? { cache: `tools-${Date.now()}` } : {});
+    state.toolsCache = data;
+    state.toolsCacheAt = Date.now();
   } catch (error) {
     $("#drawerBody").innerHTML = `<p class="muted">${html(error.message || "Tools could not be loaded.")}</p>`;
     toast(error.message || "Tools could not be loaded.");
@@ -2823,7 +2877,7 @@ async function openDeveloperToolsPanel() {
           <span><strong>Change user value</strong><small>Developer-only balance, XP, and shooter-score control.</small></span>
         </div>
         <form id="developerValueChangeForm" class="tool-form">
-          <label>User<select name="userId" required>${data.users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(state.me.id) ? "selected" : ""}>${html(user.username)}${Number(user.id) === Number(state.me.id) ? " (you)" : ""}</option>`).join("")}</select></label>
+          <label>User<select name="userId" required>${state.users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(state.me.id) ? "selected" : ""}>${html(user.username)}${Number(user.id) === Number(state.me.id) ? " (you)" : ""}</option>`).join("")}</select></label>
           <div class="tool-range-grid">
             <label>Change<select name="field"><option value="gold">Gold</option><option value="diamonds">Diamonds</option><option value="xp">XP</option><option value="shoot">Shoot score</option></select></label>
             <label>Set value<input name="value" type="number" min="0" step="1" value="0" required /></label>
@@ -2853,6 +2907,8 @@ async function openDeveloperToolsPanel() {
     try {
       const result = await api("/api/admin/tools/access", { method: "POST", body: JSON.stringify({ tool: input.dataset.chiefTool, enabled }) });
       input.checked = Boolean(result.enabled);
+      state.toolsCache = null;
+      state.toolsCacheAt = 0;
       toast("Chief access updated.");
     } catch (error) {
       input.checked = !enabled;
@@ -2869,7 +2925,7 @@ async function openDeveloperToolsPanel() {
     const botAvatarUrl = $("#drawerIntruderAvatar")?.value.trim();
     await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: true, minIntervalMinutes, maxIntervalMinutes, botName, botAvatarUrl }) });
     toast("Intruder saved.");
-    await openDeveloperToolsPanel();
+    await openDeveloperToolsPanel({ force: true });
   });
   $("#drawerIntruderStopButton")?.addEventListener("click", async () => {
     const minIntervalMinutes = Number($("#drawerIntruderMin")?.value || 2);
@@ -2878,13 +2934,13 @@ async function openDeveloperToolsPanel() {
     const botAvatarUrl = $("#drawerIntruderAvatar")?.value.trim();
     await api("/api/admin/tools/intruder", { method: "POST", body: JSON.stringify({ enabled: false, minIntervalMinutes, maxIntervalMinutes, botName, botAvatarUrl }) });
     toast("Intruder stopped.");
-    await openDeveloperToolsPanel();
+    await openDeveloperToolsPanel({ force: true });
   });
   $("#drawerIntruderResetButton")?.addEventListener("click", async () => {
     if (!confirm("Reset Top Shooters to 0?")) return;
     await api("/api/admin/tools/intruder/reset", { method: "POST" });
     toast("Top Shooters reset.");
-    await openDeveloperToolsPanel();
+    await openDeveloperToolsPanel({ force: true });
   });
   $("#developerValueChangeForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2892,7 +2948,7 @@ async function openDeveloperToolsPanel() {
     await api("/api/admin/tools/user-values", { method: "POST", body: JSON.stringify(form) });
     toast("User value changed.");
     await bootstrap();
-    await openDeveloperToolsPanel();
+    await openDeveloperToolsPanel({ force: true });
   });
 }
 
