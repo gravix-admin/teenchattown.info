@@ -16,6 +16,7 @@ const authRoutes = require("./routes/auth");
 const chatRoutes = require("./routes/chat");
 const socialRoutes = require("./routes/social");
 const adminRoutes = require("./routes/admin");
+const gameRoutes = require("./routes/games");
 
 const app = express();
 const server = http.createServer(app);
@@ -75,12 +76,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(attachUser);
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), staticOptions("30d")));
 app.use("/assets", express.static(path.join(__dirname, "public", "assets"), staticOptions("30d")));
-app.use(express.static(path.join(__dirname, "public"), staticOptions("0")));
+app.use(express.static(path.join(__dirname, "public"), staticOptions("1d")));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/games", gameRoutes);
 
 if (!io) {
   app.get("/socket.io/socket.io.js", (_req, res) => {
