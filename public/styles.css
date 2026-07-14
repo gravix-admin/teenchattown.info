@@ -2860,7 +2860,7 @@ html.returning-user #authScreen { display: none; }
   padding: 4px;
 }
 .pm-composer .composer-icon,
-.pm-composer .icon-send { width: 36px; min-width: 36px; height: 36px; }
+.pm-composer .icon-send { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; }
 .pm-composer input { min-height: 36px; }
 .pm-reply-composer {
   display: grid;
@@ -4314,6 +4314,8 @@ html.returning-user #authScreen { display: none; }
     width: 30px;
     min-width: 30px;
     height: 30px;
+    min-height: 30px;
+    padding: 0;
   }
   .pm-composer .composer-icon svg, .pm-composer .icon-send svg {
     width: 16px;
