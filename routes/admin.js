@@ -91,6 +91,10 @@ router.patch("/users/:id", async (req, res) => {
   if (req.body.rank && ranks.includes(req.body.rank)) {
     if (!canControl(req.user.rank_name, req.body.rank)) return res.status(403).json({ error: "You cannot assign that rank." });
     updates.rank_name = req.body.rank;
+    updates.rank_until = null;
+    updates.rank_plan = null;
+    updates.rank_base = null;
+    updates.svip_until = null;
   }
   if (req.body.username && await permission(req.user, "changeRank")) {
     const username = normalizeUsername(req.body.username);
