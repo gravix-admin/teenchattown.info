@@ -193,6 +193,8 @@ function api(path, options = {}) {
       const error = new Error(data.error || "Request failed");
       error.status = response.status;
       error.code = data.code;
+      error.data = data;
+      if (["KICKED", "BANNED"].includes(data.code)) showModerationGate(data);
       throw error;
     }
     return data;
@@ -254,6 +256,7 @@ function permissionLabel(tool) {
     createRoom: "Create rooms",
     editRoom: "Edit rooms",
     seeIp: "See IP",
+    viewUserIntel: "View staff intelligence",
     postNews: "Post news",
     intruderTool: "Intruder tool",
     profileEditTool: "Profile edit tool",
@@ -352,13 +355,66 @@ function formatDate(value) {
   return new Intl.DateTimeFormat([], { year: "numeric", month: "short", day: "2-digit" }).format(new Date(value));
 }
 
+let moderationCountdownTimer = null;
+function moderationClock(ms) {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  return `${hours}:${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function showModerationGate(data = {}) {
+  clearInterval(moderationCountdownTimer);
+  let gate = $("#moderationGate");
+  if (!gate) {
+    gate = document.createElement("section");
+    gate.id = "moderationGate";
+    gate.className = "moderation-gate";
+    document.body.append(gate);
+  }
+  const kicked = data.code === "KICKED" || data.action === "kick";
+  const until = data.until ? new Date(data.until).getTime() : 0;
+  gate.innerHTML = `<div class="moderation-gate-card"><span class="moderation-gate-icon">!</span><span class="eyebrow">Staff action</span><h1>${kicked ? "Kicked" : "Account banned"}</h1><p>${html(data.reason || data.body || data.error || "Access has been restricted by staff.")}</p>${kicked ? '<strong id="moderationCountdown">--:--:--</strong><small>You can return automatically when this countdown reaches zero.</small>' : '<small>This restriction has no countdown.</small>'}<button type="button" id="moderationLogout">Sign out</button></div>`;
+  gate.classList.add("active");
+  $("#moderationLogout").addEventListener("click", () => { localStorage.removeItem("tct_token"); location.reload(); });
+  if (kicked) {
+    const tick = () => {
+      const remaining = until - Date.now();
+      if ($("#moderationCountdown")) $("#moderationCountdown").textContent = moderationClock(remaining);
+      if (remaining <= 0) { clearInterval(moderationCountdownTimer); location.reload(); }
+    };
+    tick();
+    moderationCountdownTimer = setInterval(tick, 1000);
+  }
+}
+
+function showWarningNotice(data = {}) {
+  let notice = $("#warningNotice");
+  if (!notice) {
+    notice = document.createElement("section");
+    notice.id = "warningNotice";
+    notice.className = "warning-notice";
+    document.body.append(notice);
+  }
+  notice.innerHTML = `<div class="warning-notice-card"><span>!</span><h2>Staff warning</h2><p>${html(data.body || "A staff member sent you a warning.")}</p><button class="primary" type="button">I understand</button></div>`;
+  notice.classList.add("active");
+  $("button", notice).addEventListener("click", () => notice.classList.remove("active"));
+}
+
+function formatFullDateTime(value) {
+  if (!value) return "Never";
+  const date = new Date(value);
+  const day = new Intl.DateTimeFormat([], { day: "2-digit", month: "long", year: "numeric" }).format(date);
+  const time = new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" }).format(date);
+  return `${day} | ${time}`;
+}
+
 function isOnline(user) {
   if (!user || user.bannedUntil || user.kickedUntil) return false;
   if (user.profileStatus === "Invisible") return false;
   if (state.me && Number(user.id) === Number(state.me.id)) return true;
-  if (user.online) return true;
   if (!user.lastSeen) return false;
-  return Date.now() - new Date(user.lastSeen).getTime() < 30 * 60 * 1000;
+  return Boolean(user.online && Date.now() - new Date(user.lastSeen).getTime() < 70 * 1000);
 }
 
 function visibleInUserList(user) {
@@ -803,8 +859,8 @@ function warmFastViews() {
 function renderRooms() {
   const room = state.rooms.find((item) => Number(item.id) === Number(state.currentRoomId));
   if (room) {
-    $("#roomTitle").textContent = room.name;
-    $("#roomDescription").textContent = "";
+    if ($("#roomTitle")) $("#roomTitle").textContent = room.name;
+    if ($("#roomDescription")) $("#roomDescription").textContent = "";
     applyRoomBackground();
   }
   renderRoomGrid();
@@ -813,19 +869,60 @@ function renderRooms() {
 function renderRoomGrid() {
   const grid = $("#roomGrid");
   if (!grid) return;
+  const canCreate = hasTool("createRoom");
+  const canManage = ["chief", "developer"].includes(state.me?.rank);
+  const toolbar = $(".room-gallery-toolbar");
+  if (toolbar && !$("#roomCreateButton")) toolbar.insertAdjacentHTML("beforeend", '<button id="roomCreateButton" class="room-add-button" type="button">+ Add room</button>');
+  $("#roomCreateButton")?.classList.toggle("hidden", !canCreate);
+  if ($("#roomCreateButton") && !$("#roomCreateButton").dataset.bound) {
+    $("#roomCreateButton").dataset.bound = "1";
+    $("#roomCreateButton").addEventListener("click", openRoomCreator);
+  }
   const query = String($("#roomSearch")?.value || "").trim().toLowerCase();
   const visibleRooms = state.rooms.filter((room) => !query || `${room.name || ""} ${room.description || ""}`.toLowerCase().includes(query));
   $("#roomGalleryCount") && ($("#roomGalleryCount").textContent = `${visibleRooms.length} ${visibleRooms.length === 1 ? "room" : "rooms"}`);
   grid.innerHTML = visibleRooms.map((room) => `
-    <button class="room-card ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""} ${Number(room.staff_only) === 1 ? "staff-room" : ""}" data-room-card="${room.id}" type="button">
+    <article class="room-card ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""} ${Number(room.staff_only) === 1 ? "staff-room" : ""}">
       <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" loading="lazy" decoding="async" />
-      <span>${Number(room.staff_only) === 1 ? "Staff only" : roomLocked(room) ? "Locked" : "Open now"}</span>
+      <span>${Number(room.is_pinned) === 1 ? "Pinned" : Number(room.staff_only) === 1 ? "Staff only" : roomLocked(room) ? "Locked" : "Open now"}</span>
       <strong>${html(room.name)}</strong>
       <small>${html(room.description)}</small>
-      <em>${Number(room.id) === Number(state.currentRoomId) ? "You are here" : "Enter room"}</em>
-    </button>
+      <div class="room-card-footer"><button data-room-card="${room.id}" type="button">${Number(room.id) === Number(state.currentRoomId) ? "You are here" : "Enter room"}</button>${canManage ? `<button class="room-manage-button" data-room-menu="${room.id}" type="button" aria-label="Manage ${html(room.name)}">...</button>` : ""}</div>
+    </article>
   `).join("") || '<div class="empty-state room-empty"><strong>No matching rooms</strong><p class="muted">Try a different search.</p></div>';
   $$("[data-room-card]").forEach((button) => button.addEventListener("click", async () => switchRoom(button.dataset.roomCard)));
+  $$("[data-room-menu]").forEach((button) => button.addEventListener("click", () => openRoomManager(button.dataset.roomMenu)));
+}
+
+function openRoomCreator() {
+  $("#userActionBody").innerHTML = `<form id="roomCreateForm" class="staff-card room-create-form"><div><span class="eyebrow">New community space</span><h2>Add room</h2><p class="muted">The room appears in the gallery as soon as it is created.</p></div><input name="name" maxlength="80" placeholder="Room name" required /><textarea name="description" maxlength="255" placeholder="What is this room for?" required></textarea><input name="password" type="password" placeholder="Optional password" /><label class="file-pill">Choose room image<input name="image" type="file" accept="image/*" /></label><label class="toggle-row">Staff-only room<input name="staffOnly" type="checkbox" value="true" /></label><div class="modal-action-row"><button data-room-create-cancel type="button">Cancel</button><button class="primary" type="submit">Create room</button></div></form>`;
+  $("#roomCreateForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    if (!event.currentTarget.staffOnly.checked) form.delete("staffOnly");
+    await api("/api/chat/rooms", { method: "POST", body: form });
+    $("#userActionModal").close();
+    toast("Room created.");
+  });
+  $("[data-room-create-cancel]")?.addEventListener("click", () => $("#userActionModal").close());
+  if (!$("#userActionModal").open) $("#userActionModal").showModal();
+}
+
+function openRoomManager(roomId) {
+  const room = state.rooms.find((item) => Number(item.id) === Number(roomId));
+  if (!room) return;
+  const mainRoom = String(room.name).toLowerCase() === "main room";
+  $("#userActionBody").innerHTML = `<div class="staff-card"><span class="eyebrow">Room controls</span><h2>${html(room.name)}</h2><p class="muted">Pin it near the top of the gallery or permanently remove it.</p><div class="modal-action-row"><button data-room-pin type="button">${Number(room.is_pinned) ? "Unpin room" : "Pin room"}</button>${mainRoom ? "" : '<button class="danger-action" data-room-delete type="button">Delete room</button>'}</div></div>`;
+  $("[data-room-pin]")?.addEventListener("click", async () => {
+    await api(`/api/chat/rooms/${room.id}/pin`, { method: "PATCH", body: JSON.stringify({ pinned: !Number(room.is_pinned) }) });
+    $("#userActionModal").close();
+  });
+  $("[data-room-delete]")?.addEventListener("click", async () => {
+    if (!confirm(`Delete ${room.name}? Its messages and X-O matches will be removed permanently.`)) return;
+    await api(`/api/chat/rooms/${room.id}`, { method: "DELETE" });
+    $("#userActionModal").close();
+  });
+  if (!$("#userActionModal").open) $("#userActionModal").showModal();
 }
 
 function openRoomSwitcher() {
@@ -1158,11 +1255,18 @@ function bindMessageActions() {
     if (!username || username === state.me?.username) return;
     const input = $("#messageInput");
     const tag = `@${username}`;
-    if (!input.value.toLowerCase().includes(tag.toLowerCase())) {
-      input.value = `${tag} ${input.value}`.trimEnd();
-    }
+    const tokens = input.value.toLowerCase().split(/\s+/);
+    if (tokens.includes(tag.toLowerCase())) return input.focus();
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const insertion = `${before && !/\s$/.test(before) ? " " : ""}${tag}${after && !/^\s/.test(after) ? " " : ""}`;
+    input.value = before + insertion + after;
     input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
+    const cursor = before.length + insertion.length;
+    input.setSelectionRange(cursor, cursor);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }));
   $$("[data-reply]").forEach((button) => button.addEventListener("click", () => {
     closeMessageMenus();
@@ -1171,7 +1275,6 @@ function bindMessageActions() {
     const tag = message?.username ? `@${message.username}` : `#${state.replyToId}`;
     $("#replyBox span").textContent = `Replying to ${tag}: ${String(message?.body || "").slice(0, 80)}`;
     $("#replyBox").classList.remove("hidden");
-    if (message?.username && !$("#messageInput").value.includes(tag)) $("#messageInput").value = `${tag} ${$("#messageInput").value}`;
     $("#messageInput").focus();
   }));
   $$("[data-quote]").forEach((button) => button.addEventListener("click", () => {
@@ -1269,8 +1372,10 @@ function renderUsers() {
     : state.userTab === "staff"
       ? state.users.filter((user) => staffRanks.has(user.rank))
       : state.users).filter(visibleInUserList);
-  const online = source.filter((user) => isOnline(user));
-  const offline = source.filter((user) => !isOnline(user));
+  const rankSort = (a, b) => rankOrder.indexOf(b.rank) - rankOrder.indexOf(a.rank) || displayName(a).localeCompare(displayName(b));
+  const seenSort = (a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0) || displayName(a).localeCompare(displayName(b));
+  const online = source.filter((user) => isOnline(user)).sort(state.userTab === "staff" ? rankSort : (a, b) => displayName(a).localeCompare(displayName(b)));
+  const offline = source.filter((user) => !isOnline(user)).sort(state.userTab === "staff" ? rankSort : seenSort);
   $("#userList").innerHTML = `
     <section class="right-user-section">
       <h3>${state.userTab === "staff" ? "Staff online" : "Online"}</h3>
@@ -1402,7 +1507,7 @@ function paintXoGame(game) {
     ? '<div class="xo-waiting-note"><strong>Invitation is live</strong><span>Another player has one minute to join. No gold is charged until they do.</span></div><button class="xo-cancel-button" data-cancel-waiting-xo type="button"><b>×</b><span>Cancel invitation permanently<small>Closes this match for everyone</small></span></button>'
     : "";
   root.innerHTML = `
-    <section class="xo-arena ${["won", "draw"].includes(game.status) ? "match-finished" : ""}">
+    <section class="xo-arena ${["won", "draw"].includes(game.status) ? "match-finished" : ""}" data-xo-game="${game.id}" data-xo-game-status="${html(game.status)}">
       <div class="xo-arena-head">
         <button class="xo-back-button" data-back-games type="button" title="Leave this screen without cancelling the match"><b>‹</b><span>Game list<small>Match stays open</small></span></button>
         <span><small>500 gold match</small><h3>${html(game.host_name || "Player X")} <b>vs</b> ${html(game.guest_name || "Waiting...")}</h3></span>
@@ -1446,7 +1551,7 @@ function paintXoGame(game) {
     if (!confirm("Permanently cancel this invitation? This is not just closing the screen. The match will be closed for everyone.")) return;
     try {
       const updated = await api("/api/games/xo/" + game.id + "/cancel", { method: "POST" });
-      paintXoGame(updated);
+      updateXoGameSmooth(updated);
     } catch (error) { toast(error.message); }
   });
   $("[data-forfeit-xo]", root)?.addEventListener("click", async () => {
@@ -1462,7 +1567,7 @@ function paintXoGame(game) {
     button.disabled = true;
     try {
       const updated = await api("/api/games/xo/" + game.id + "/move", { method: "POST", body: JSON.stringify({ cell: Number(button.dataset.xoCell) }) });
-      paintXoGame(updated);
+      updateXoGameSmooth(updated);
       if (updated.status !== "playing") refreshUsersLight().catch(() => {});
     } catch (error) {
       toast(error.message);
@@ -2082,7 +2187,9 @@ async function openProfile(userId) {
   const previewFrame = profileFrame(previewUser);
   $("#profileFrameOverlay").classList.toggle("active", Boolean(previewFrame));
   $("#profileFrameOverlay").style.backgroundImage = previewFrame ? `url('${profileFrameAssets[previewFrame]}')` : "";
-  $("#profileMore").innerHTML = "";
+  $("#profileAbout").innerHTML = previewUser ? `<div class="profile-overview-card"><h3>About ${html(displayName(previewUser))}</h3><p>${html(previewUser.aboutMe || previewUser.bio || "This profile is still being decorated.")}</p></div>` : "";
+  $("#profileIntel").innerHTML = "";
+  $("#profileIntelTabButton")?.classList.add("hidden");
   $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Wall loads when opened</strong></div>';
   $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Gallery loads when opened</strong></div>';
   $("#profileCornerActions").innerHTML = '<button data-close-profile title="Close" type="button">x</button>';
@@ -2103,7 +2210,6 @@ async function openProfile(userId) {
   if (isSystemBot(user)) return;
   const self = Number(user.id) === Number(state.me.id);
   const info = levelInfo(user.xp);
-  const badgeCount = data.badges.length + (data.gifts || []).length;
   const accent = user.profileAccent || "#ef4444";
   $("#profileModal").style.setProperty("--profile-accent", accent);
   $("#profileCover").style.setProperty("--profile-banner", `url('${user.bannerUrl || "/assets/profile-banner.svg"}')`);
@@ -2132,20 +2238,10 @@ async function openProfile(userId) {
     ? `<button class="primary" data-own-action="edit" type="button">Edit Profile</button>`
     : `<button class="primary" data-pm-user="${user.id}" type="button">Message</button>${state.friends.some((item) => Number(item.id || item.friend_id) === Number(user.id)) ? `<button data-remove-friend-action="${user.id}" type="button">Remove Friend</button>` : `<button data-add-friend="${user.id}" type="button">Add Friend</button>`}`;
   $("#profileInfo").innerHTML = profileOverviewPanel(user);
-  $("#profileMore").innerHTML = `
-    <div class="profile-overview-card">
-      <h3>About ${html(displayName(user))}</h3>
-      <p>${html(user.aboutMe || user.bio || "This profile is still being decorated.")}</p>
-      <div class="profile-stat-grid">
-        <article><span>Messages</span><strong>${compactNumber(user.messageCount || 0)}</strong></article>
-        <article><span>Level</span><strong>${info.level}</strong></article>
-        <article><span>Likes</span><strong>${compactNumber(data.likeCount || user.profileLikes || 0)}</strong></article>
-        <article><span>Badges</span><strong>${badgeCount}</strong></article>
-      </div>
-    </div>
-    ${user.profileMusicUrl ? `<div class="profile-music"><div><span>Now playing</span><strong>${html(displayName(user))}'s profile soundtrack</strong></div><audio id="activeProfileMusic" controls autoplay preload="none" src="${html(user.profileMusicUrl)}"></audio></div>` : '<div class="profile-empty-feature"><strong>No profile soundtrack yet</strong><span>This profile stays quiet until a track is added.</span></div>'}
-    ${profileBadgesPanel(data)}
-  `;
+  $("#profileAbout").innerHTML = `<div class="profile-overview-card profile-about-card"><span class="eyebrow">Profile story</span><h3>About ${html(displayName(user))}</h3><p>${html(user.aboutMe || user.bio || "This profile is still being decorated.")}</p><div class="profile-stat-grid"><article><span>Level</span><strong>${info.level}</strong></article><article><span>Likes</span><strong>${compactNumber(data.likeCount || user.profileLikes || 0)}</strong></article></div></div>`;
+  const canViewIntel = Boolean(state.me?.rank === "developer" || state.permissions?.viewUserIntel) && !self;
+  $("#profileIntelTabButton")?.classList.toggle("hidden", !canViewIntel);
+  $("#profileIntel").innerHTML = canViewIntel ? '<div class="profile-loading-card"><span></span><strong>Open this tab to load staff intelligence</strong></div>' : "";
   $("#profileWall").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the wall</strong></div>';
   $("#profileGallery").innerHTML = '<div class="profile-loading-card"><span></span><strong>Open this tab to load the gallery</strong></div>';
   $$(".profile-tabs button").forEach((button) => button.classList.toggle("active", button.dataset.profileTab === "info"));
@@ -2161,8 +2257,34 @@ async function openProfile(userId) {
   }));
   bindProfileSocialActions(user.id);
   bindUserActionButtons(user.id);
-  $("#activeProfileMusic")?.play().catch(() => {});
   return true;
+}
+
+function updateXoGameSmooth(game) {
+  const root = $("#gamesHub");
+  const arena = $(".xo-arena", root);
+  if (!arena || Number(arena.dataset.xoGame) !== Number(game.id) || arena.dataset.xoGameStatus !== "playing" || game.status !== "playing") {
+    paintXoGame(game);
+    return;
+  }
+  const board = String(game.board || "---------").padEnd(9, "-").slice(0, 9).split("");
+  const myTurn = Number(game.turn_user_id) === Number(state.me?.id);
+  $$("[data-xo-cell]", root).forEach((cell) => {
+    const value = board[Number(cell.dataset.xoCell)];
+    cell.textContent = value === "-" ? "" : value;
+    cell.classList.toggle("played", value !== "-");
+    cell.disabled = !myTurn || value !== "-";
+  });
+  const status = $("[data-xo-status]", root);
+  if (status) status.textContent = xoStatusText(game);
+}
+
+async function loadProfileIntel(userId) {
+  const panel = $("#profileIntel");
+  if (!panel) return;
+  panel.innerHTML = '<div class="profile-loading-card"><span></span><strong>Loading protected account intelligence...</strong></div>';
+  const intel = await api(`/api/admin/users/${Number(userId)}/intel`, { cache: "no-store" });
+  panel.innerHTML = `<section class="profile-intel-card"><div><span class="eyebrow">Staff-only evidence</span><h3>Account intelligence</h3><p>Use this information only for safety investigations and documented moderation.</p></div><div class="profile-detail-bubbles"><article><span>IP address</span><strong>${html(intel.ip)}</strong></article><article><span>City / State</span><strong>${html(`${intel.city} / ${intel.region}`)}</strong></article><article><span>Country</span><strong>${html(intel.country)}</strong></article><article><span>Network provider</span><strong>${html(intel.provider)}</strong></article><article><span>Last online</span><strong>${html(formatFullDateTime(intel.lastSeen))}</strong></article><article><span>Account created</span><strong>${html(formatFullDateTime(intel.createdAt))}</strong></article></div></section>`;
 }
 
 function compactNumber(value) {
@@ -2172,10 +2294,10 @@ function compactNumber(value) {
 function profileOverviewPanel(user) {
   const details = [
     ["Status", user.profileStatus || "Online"],
-    ["Gender", user.gender || "Not set"],
+    ["Gender", user.gender || "Hidden"],
     ["Age", user.age ? `${user.age} years` : "Hidden"],
-    ["Country", user.country || "Not detected"],
-    ["Last online", formatDate(user.lastSeen)],
+    ["Country", user.country || "Hidden"],
+    ["Last online", formatFullDateTime(user.lastSeen)],
     ["Member since", formatDate(user.createdAt)],
   ];
   return `
@@ -2401,7 +2523,7 @@ function closeProfileActionsOverlay() {
 }
 
 function openProfileActionsDrawer(userId, fallbackUser = null) {
-  const user = userById(userId) || fallbackUser;
+  const user = fallbackUser || userById(userId);
   if (!user) return toast("Profile actions are still loading. Try again.");
   if (isSystemBot(user)) return;
   const overlay = $("#profileActionOverlay");
@@ -2446,23 +2568,18 @@ function openProfileActionsDrawer(userId, fallbackUser = null) {
         <div class="profile-action-panel" data-profile-action-panel="staff">
           <div class="staff-quick-tools">
             <h3>Staff</h3>
-            <p class="muted">Only tools allowed for your rank appear here.</p>
-            <textarea id="staffReason" placeholder="Reason or note"></textarea>
-            ${hasTool("warn") ? `<button data-mod="warn" type="button">Warn</button>` : ""}
-            ${hasTool("mute") ? `
-              <div class="tool-chip-row">
-                <button data-mod="mute" data-minutes="10" type="button">Mute 10m</button>
-                <button data-mod="mute" data-minutes="60" type="button">Mute 1h</button>
-              </div>
-            ` : ""}
-            ${hasTool("kick") ? `
-              <div class="tool-chip-row">
-                <button data-mod="kick" data-minutes="10" type="button">Kick 10m</button>
-                <button data-mod="kick" data-minutes="2880" type="button">Kick 2d</button>
-              </div>
-            ` : ""}
-            ${hasTool("ban") ? `<button data-mod="ban" class="danger-action" type="button">Ban</button>` : ""}
-            ${hasTool("deleteAccount") ? `<button data-mod="delete" class="danger-action" type="button">Delete account</button>` : ""}
+            <p class="muted">Choose an action. You will confirm its message, reason, and duration next.</p>
+            <div class="moderation-action-grid">
+              ${hasTool("warn") ? '<button data-profile-moderation="warn" type="button"><b>!</b><span>Warn<small>Written warning</small></span></button>' : ""}
+              ${hasTool("mute") ? '<button data-profile-moderation="mute" type="button"><b>M</b><span>Mute<small>Disable messaging</small></span></button>' : ""}
+              ${hasTool("kick") ? '<button data-profile-moderation="kick" type="button"><b>K</b><span>Kick<small>Timed removal</small></span></button>' : ""}
+              ${hasTool("ban") ? '<button class="danger-action" data-profile-moderation="ban" type="button"><b>B</b><span>Ban<small>Permanent block</small></span></button>' : ""}
+            </div>
+            <div class="modal-action-row moderation-reversal-row">
+              ${user.mutedUntil && new Date(user.mutedUntil) > new Date() ? '<button data-profile-reverse="unmute" type="button">Unmute</button>' : ""}
+              ${user.kickedUntil && new Date(user.kickedUntil) > new Date() ? '<button data-profile-reverse="unkick" type="button">Unkick</button>' : ""}
+              ${user.bannedUntil && new Date(user.bannedUntil) > new Date() ? '<button data-profile-reverse="unban" type="button">Unban</button>' : ""}
+            </div>
           </div>
         </div>
       ` : ""}
@@ -2502,12 +2619,13 @@ function openProfileActionsDrawer(userId, fallbackUser = null) {
     $$("[data-profile-action-tab]", overlay).forEach((tab) => tab.classList.toggle("active", tab === button));
     $$("[data-profile-action-panel]", overlay).forEach((panel) => panel.classList.toggle("active", panel.dataset.profileActionPanel === button.dataset.profileActionTab));
   }));
-  $$("[data-mod]", overlay).forEach((button) => button.addEventListener("click", () => {
-    const action = button.dataset.mod;
-    if (action === "delete" && !confirm("Delete this account permanently?")) return;
-    if (action === "ban" && !confirm("Permanently ban this account?")) return;
-    moderate(user.id, action, { minutes: Number(button.dataset.minutes || 0), reason: $("#staffReason")?.value.trim() || "" });
+  $$("[data-profile-moderation]", overlay).forEach((button) => button.addEventListener("click", () => {
+    closeProfileActionsOverlay();
+    if ($("#profileModal").open) $("#profileModal").close();
+    openModerationComposer(user, button.dataset.profileModeration);
+    if (!$("#userActionModal").open) $("#userActionModal").showModal();
   }));
+  $$("[data-profile-reverse]", overlay).forEach((button) => button.addEventListener("click", () => moderate(user.id, button.dataset.profileReverse)));
   $("[data-edit-username]", overlay)?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const username = new FormData(event.currentTarget).get("username");
@@ -2540,7 +2658,6 @@ function openUserActions(userId) {
   if (!user) return;
   if (isSystemBot(user)) return;
   const self = Number(user.id) === Number(state.me.id);
-  const canOpenStaffPanel = staffRanks.has(state.me.rank) && canControlRank(user.rank);
   setDrawerChrome({ title: "Profile", user: true });
   $("#drawerBody").innerHTML = `
     <div class="user-slide-card">
@@ -2555,15 +2672,11 @@ function openUserActions(userId) {
         ${self
           ? `<button data-own-action="edit" type="button"><span>Edit profile</span></button>`
           : `<button data-pm-user="${user.id}" type="button"><span>Private</span></button>
-             ${canOpenStaffPanel ? `<button data-user-action-panel="${user.id}" type="button"><span>Action</span></button>` : ""}
              <button data-like-profile="${user.id}" type="button"><span>Like</span></button>`}
       </div>
     </div>
   `;
   bindUserActionButtons(user.id);
-  $("[data-user-action-panel]")?.addEventListener("click", async () => {
-    if (await openProfile(user.id)) openProfileActionsDrawer(user.id, user);
-  });
   showDrawer();
 }
 
@@ -2915,17 +3028,15 @@ function openProfileEditor(section = "edit") {
     updateStatusPreview(form.profileStatus.value);
     form.profileAccent.value = state.me.profileAccent || "#ef4444";
     form.showOnlineStatus.checked = state.me.showOnlineStatus !== false;
+    form.showCountry.checked = state.me.showCountry !== false;
+    form.showAge.checked = state.me.showAge !== false;
+    form.showGender.checked = state.me.showGender !== false;
     form.usernameColor.value = state.me.usernameColor || "";
     form.textColor.value = state.me.textColor || "";
     form.theme.value = state.me.theme || "dark";
     form.bubbleStyle.value = state.me.bubbleStyle || "default";
     $("#editBannerPreview").style.setProperty("--edit-banner", `url('${state.me.bannerUrl || "/assets/profile-banner.svg"}')`);
     $("#editAvatarPreview").src = avatar(state.me);
-    $("#profileMusicUpload").value = "";
-    $("#profileSoundPreview").innerHTML = state.me.profileMusicUrl
-      ? `<audio controls preload="metadata" src="${html(state.me.profileMusicUrl)}"></audio><span>Current soundtrack</span>`
-      : "<span>No track added</span>";
-    $("#removeProfileMusicButton").disabled = !state.me.profileMusicUrl;
     $("#bioCount").textContent = `${form.bio.value.length}/120`;
     $$("[data-accent]").forEach((button) => button.classList.toggle("active", button.dataset.accent === form.profileAccent.value));
   }
@@ -3099,48 +3210,37 @@ function openStaffActions(userId) {
     <div class="staff-card">
       <div class="menu-profile">
         <img class="avatar" src="${html(avatar(user))}" alt="" />
-        <div><h2>${html(user.username)}</h2>${userRankBadge(user)}<p class="muted">Staff action center</p></div>
+        <div><h2>${html(user.username)}</h2>${userRankBadge(user)}<p class="muted">Choose a moderation action</p></div>
       </div>
-      <div class="staff-tabs"><button class="active" type="button">Staff</button></div>
-      <div class="warning-box"><strong>!</strong><span>Write the staff warning or reason below. The user receives it as a notification.</span></div>
-      <textarea id="staffReason" placeholder="Reason or warning message"></textarea>
-      <div class="staff-section">
-        <strong>Warn</strong>
-        <button data-mod="warn" type="button">Send warning</button>
+      <div class="moderation-action-grid">
+        ${hasTool("warn") ? '<button data-moderation-open="warn" type="button"><b>!</b><span>Warn<small>Send a written warning</small></span></button>' : ""}
+        ${hasTool("mute") ? '<button data-moderation-open="mute" type="button"><b>M</b><span>Mute<small>Stop messaging everywhere</small></span></button>' : ""}
+        ${hasTool("kick") ? '<button data-moderation-open="kick" type="button"><b>K</b><span>Kick<small>Remove with a countdown</small></span></button>' : ""}
+        ${hasTool("ban") ? '<button class="danger-action" data-moderation-open="ban" type="button"><b>B</b><span>Ban<small>Block the account</small></span></button>' : ""}
       </div>
-      <div class="staff-section">
-        <strong>Mute</strong>
-        <div class="chip-row">
-          <button data-mod="mute" data-minutes="2" type="button">2 min</button>
-          <button data-mod="mute" data-minutes="5" type="button">5 min</button>
-          <button data-mod="mute" data-minutes="10" type="button">10 min</button>
-          <button data-mod="mute" data-minutes="60" type="button">1 hr</button>
-        </div>
-      </div>
-      <div class="staff-section">
-        <strong>Kick</strong>
-        <div class="chip-row">
-          <button data-mod="kick" data-minutes="2" type="button">2 min</button>
-          <button data-mod="kick" data-minutes="5" type="button">5 min</button>
-          <button data-mod="kick" data-minutes="10" type="button">10 min</button>
-          <button data-mod="kick" data-minutes="60" type="button">1 hr</button>
-          <button data-mod="kick" data-minutes="2880" type="button">2 days</button>
-        </div>
-      </div>
-      <div class="staff-section danger-zone">
-        <strong>Ban and account</strong>
-        <button data-mod="ban" type="button">Permanent ban</button>
-        <button data-mod="delete" type="button">Delete account</button>
+      <div class="modal-action-row moderation-reversal-row">
+        ${user.mutedUntil && new Date(user.mutedUntil) > new Date() ? '<button data-mod="unmute" type="button">Unmute</button>' : ""}
+        ${user.kickedUntil && new Date(user.kickedUntil) > new Date() ? '<button data-mod="unkick" type="button">Unkick</button>' : ""}
+        ${user.bannedUntil && new Date(user.bannedUntil) > new Date() ? '<button data-mod="unban" type="button">Unban</button>' : ""}
       </div>
     </div>
   `;
-  $$("[data-mod]").forEach((button) => button.addEventListener("click", () => {
-    const action = button.dataset.mod;
-    if (action === "delete" && !confirm("Delete this account permanently?")) return;
-    if (action === "ban" && !confirm("Permanently ban this account?")) return;
-    moderate(userId, action, { minutes: Number(button.dataset.minutes || 0), reason: $("#staffReason").value.trim() });
-  }));
+  $$("[data-moderation-open]").forEach((button) => button.addEventListener("click", () => openModerationComposer(user, button.dataset.moderationOpen)));
+  $$("[data-mod]").forEach((button) => button.addEventListener("click", () => moderate(userId, button.dataset.mod)));
   if (!$("#userActionModal").open) $("#userActionModal").showModal();
+}
+
+function openModerationComposer(user, action) {
+  const durationOptions = [[1,"1 min"],[2,"2 min"],[3,"3 min"],[5,"5 min"],[10,"10 min"],[15,"15 min"],[20,"20 min"],[60,"1 hr"],[120,"2 hr"],[1440,"1 day"],[2880,"2 days"],[144000,"100 days"]];
+  const timed = ["mute", "kick"].includes(action);
+  const title = action[0].toUpperCase() + action.slice(1);
+  $("#userActionBody").innerHTML = `<form id="moderationComposer" class="staff-card moderation-composer"><div class="warning-box"><strong>!</strong><span><b>${title} ${html(user.username)}</b>${action === "warn" ? "The user will see this message in a warning window." : action === "mute" ? "Messaging will be disabled in rooms, PMs and social posts." : action === "kick" ? "The user will see your reason and a live countdown." : "The user will see your reason without a countdown."}</span></div>${timed ? `<label>Duration<select name="minutes">${durationOptions.map(([value,label]) => `<option value="${value}">${label}</option>`).join("")}</select></label>` : ""}<label>${action === "warn" ? "Warning message" : "Reason"}<textarea name="reason" maxlength="500" required placeholder="Write a clear ${action === "warn" ? "warning" : "reason"}..."></textarea></label><div class="modal-action-row"><button data-moderation-cancel type="button">Cancel</button><button class="${action === "ban" ? "danger-action" : "primary"}" type="submit">${action === "warn" ? "Send warning" : `Apply ${title.toLowerCase()}`}</button></div></form>`;
+  $("[data-moderation-cancel]").addEventListener("click", () => openStaffActions(user.id));
+  $("#moderationComposer").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    await moderate(user.id, action, { minutes: Number(values.minutes || 0), reason: String(values.reason || "").trim() });
+  });
 }
 
 async function moderate(userId, action, extra = {}) {
@@ -3496,19 +3596,8 @@ async function renderAdmin() {
           <div class="tool-actions">
             <button class="primary" type="submit">${intruder.enabled ? "Save" : "Start"}</button>
             <button id="intruderStopButton" type="button" ${intruder.enabled ? "" : "disabled"}>Stop</button>
-            <button id="intruderResetButton" class="danger-action" type="button">Reset Top Shooters</button>
           </div>
         </form>
-        <div class="tool-score-list">
-          ${(intruder.scores || []).map((user, index) => `
-            <div class="tool-score-row">
-              <span>#${index + 1}</span>
-              <img class="avatar" src="${html(user.avatar_url || "/assets/avatar-other.svg")}" alt="" />
-              <strong>${html(user.display_name || user.username)}</strong>
-              <b>${compactNumber(user.intruder_points || 0)}</b>
-            </div>
-          `).join("") || '<p class="muted">No shots yet.</p>'}
-        </div>
       </article>
     </section>
   ` : "";
@@ -3528,16 +3617,6 @@ async function renderAdmin() {
       <article class="stat-card"><strong>${data.stats.openReports}</strong><span>Open reports</span></article>
     </div>
     ${toolsSection}
-    <section class="panel admin-panel"><h2>Create room</h2>
-      <form id="adminCreateRoom" class="room-create-form">
-        <input name="name" placeholder="Room name" required />
-        <input name="description" placeholder="Room description" required />
-        <input name="imageUrl" placeholder="Room image URL or /assets/room-main.svg" />
-        <input name="password" placeholder="Optional room password" />
-        <label class="file-pill">Room image<input name="image" type="file" accept="image/*" /></label>
-        <button class="primary" type="submit">Create room</button>
-      </form>
-    </section>
     <section class="panel admin-panel"><h2>Reports</h2><div class="admin-table">${data.reports.map((report) => `
       <div class="report-row">
         <span><strong>${html(report.target_type || "user")} report</strong><small>By ${html(report.reporter_name || `#${report.reporter_id}`)} ${report.target_name ? `about ${html(report.target_name)}` : ""} ${report.message_id ? `| chat #${report.message_id}` : ""} ${report.private_message_id ? `| PM #${report.private_message_id}` : ""} ${report.wall_post_id ? `| wall #${report.wall_post_id}` : ""}</small></span>
@@ -3570,14 +3649,6 @@ async function renderAdmin() {
   `;
   $("#adminRefresh").addEventListener("click", renderAdmin);
   $("#adminClose").addEventListener("click", () => setView("chat"));
-  $("#adminCreateRoom").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await api("/api/chat/rooms", { method: "POST", body: form });
-    toast("Room created.");
-    await bootstrap();
-    await renderAdmin();
-  });
   $("#intruderToolsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const minIntervalMinutes = Number($("#intruderMin")?.value || 2);
@@ -3688,14 +3759,22 @@ const realtimeHandlers = {
     refreshPmUnread().catch(() => {});
   },
   moderation(data = {}) {
+    if (data.action === "warn") return showWarningNotice(data);
     toast(data.body || data.title || "Staff action applied.");
-    if (["kick", "ban", "password", "delete"].includes(data.action)) {
+    if (["kick", "ban"].includes(data.action)) {
+      showModerationGate(data);
+    } else if (["password", "delete"].includes(data.action)) {
       localStorage.removeItem("tct_token");
       setTimeout(() => location.reload(), 900);
     }
   },
   "users-changed"(data = {}) {
     if (data.userId) state.profileCache.delete(Number(data.userId));
+    if (data.userId && typeof data.online === "boolean") {
+      const user = userById(data.userId);
+      if (user) { user.online = data.online; user.lastSeen = new Date().toISOString(); }
+      renderUsers();
+    }
     scheduleUsersRefresh();
     setBadges();
   },
@@ -3718,7 +3797,8 @@ const realtimeHandlers = {
   "xo-game"(data = {}) {
     if (!$("#gamesView").classList.contains("active")) return;
     if (state.activeXoGameId && Number(state.activeXoGameId) === Number(data.gameId)) {
-      openXoGame(data.gameId).catch(() => {});
+      if (data.game) updateXoGameSmooth(data.game);
+      else openXoGame(data.gameId).catch(() => {});
     } else {
       renderGames().catch(() => {});
     }
@@ -3746,7 +3826,18 @@ const realtimeHandlers = {
     scheduleMessagesRefresh();
   },
   "rooms-changed"() {
-    bootstrap().catch((error) => toast(error.message));
+    api("/api/chat/rooms", { cache: `rooms-${Date.now()}` }).then((rooms) => {
+      state.rooms = rooms;
+      let movedFromDeletedRoom = false;
+      if (!state.rooms.some((room) => Number(room.id) === Number(state.currentRoomId))) {
+        state.currentRoomId = state.rooms.find((room) => String(room.name).toLowerCase() === "main room")?.id || state.rooms[0]?.id;
+        localStorage.setItem("tct_current_room_id", String(state.currentRoomId || ""));
+        movedFromDeletedRoom = true;
+      }
+      renderRooms();
+      if (movedFromDeletedRoom) loadMessages().catch(() => {});
+      if ($("#roomsView")?.classList.contains("active")) renderRoomGrid();
+    }).catch((error) => toast(error.message));
   },
   "news-posted"(data = {}) {
     const newsIsOpen = $("#newsView").classList.contains("active");
@@ -3813,6 +3904,9 @@ function connectEvents() {
       state.socket.on(eventName, handler);
     });
     state.socket.on("connect", () => {
+      state.socket.emit("presence");
+      clearInterval(state.presenceTimer);
+      state.presenceTimer = setInterval(() => state.socket?.connected && state.socket.emit("presence"), 45000);
       if (state.me && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
     });
     state.socket.on("reconnect", () => {
@@ -3821,6 +3915,7 @@ function connectEvents() {
     state.socket.on("connect_error", (error) => {
       console.warn("Socket connection failed; using fallback event stream.", error.message);
       state.preferEventSource = true;
+      clearInterval(state.presenceTimer);
       state.socket?.disconnect();
       state.socket = null;
       connectEventSourceFallback();
@@ -4328,6 +4423,7 @@ function bindEvents() {
     if (["wall", "gallery"].includes(button.dataset.profileTab) && state.activeProfileUserId) {
       loadProfileSection(state.activeProfileUserId, button.dataset.profileTab).catch((error) => toast(error.message));
     }
+    if (button.dataset.profileTab === "intel" && state.activeProfileUserId) loadProfileIntel(state.activeProfileUserId).catch((error) => toast(error.message));
   }));
 
   $("#editProfileForm").addEventListener("submit", async (event) => {
@@ -4336,6 +4432,9 @@ function bindEvents() {
     submitButton.disabled = true;
     const payload = Object.fromEntries(new FormData(event.currentTarget));
     payload.showOnlineStatus = event.currentTarget.showOnlineStatus.checked;
+    payload.showCountry = event.currentTarget.showCountry.checked;
+    payload.showAge = event.currentTarget.showAge.checked;
+    payload.showGender = event.currentTarget.showGender.checked;
     if (event.currentTarget.profileTitle.disabled) delete payload.profileTitle;
     if (event.currentTarget.profileStatus.disabled) delete payload.profileStatus;
     delete payload.level;

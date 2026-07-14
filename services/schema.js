@@ -3,7 +3,7 @@ const pool = require("../database");
 const { RANKS } = require("./ranks");
 
 const ranks = RANKS;
-const staffTools = ["mute", "kick", "ban", "warn", "deleteMessage", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "sendPm", "sendFiles", "createRoom", "editRoom", "seeIp", "postNews", "intruderTool", "profileEditTool"];
+const staffTools = ["mute", "kick", "ban", "warn", "deleteMessage", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "sendPm", "sendFiles", "createRoom", "editRoom", "seeIp", "viewUserIntel", "postNews", "intruderTool", "profileEditTool"];
 
 async function query(sql) {
   await pool.query(sql);
@@ -146,6 +146,10 @@ async function initSchema() {
       profile_status VARCHAR(40) DEFAULT 'Online',
       profile_accent VARCHAR(24) DEFAULT '#ef4444',
       show_online_status TINYINT DEFAULT 1,
+      is_online TINYINT DEFAULT 0,
+      show_country TINYINT DEFAULT 1,
+      show_age TINYINT DEFAULT 1,
+      show_gender TINYINT DEFAULT 1,
       bio VARCHAR(240) DEFAULT '',
       about_me TEXT NULL,
       mood VARCHAR(80) DEFAULT '',
@@ -167,7 +171,12 @@ async function initSchema() {
       rank_plan VARCHAR(20) NULL,
       rank_base VARCHAR(32) NULL,
       ip_address VARCHAR(80) DEFAULT '',
+      ip_city VARCHAR(120) DEFAULT '',
+      ip_region VARCHAR(120) DEFAULT '',
+      ip_isp VARCHAR(180) DEFAULT '',
       country VARCHAR(80) DEFAULT '',
+      kick_reason VARCHAR(500) DEFAULT '',
+      ban_reason VARCHAR(500) DEFAULT '',
       muted_until DATETIME NULL,
       kicked_until DATETIME NULL,
       banned_until DATETIME NULL,
@@ -536,6 +545,10 @@ async function migrateExistingTables() {
       profile_status: "VARCHAR(40) DEFAULT 'Online'",
       profile_accent: "VARCHAR(24) DEFAULT '#ef4444'",
       show_online_status: "TINYINT DEFAULT 1",
+      is_online: "TINYINT DEFAULT 0",
+      show_country: "TINYINT DEFAULT 1",
+      show_age: "TINYINT DEFAULT 1",
+      show_gender: "TINYINT DEFAULT 1",
       bio: "VARCHAR(240) DEFAULT ''",
       about_me: "TEXT NULL",
       mood: "VARCHAR(80) DEFAULT ''",
@@ -557,7 +570,12 @@ async function migrateExistingTables() {
       rank_plan: "VARCHAR(20) NULL",
       rank_base: "VARCHAR(32) NULL",
       ip_address: "VARCHAR(80) DEFAULT ''",
+      ip_city: "VARCHAR(120) DEFAULT ''",
+      ip_region: "VARCHAR(120) DEFAULT ''",
+      ip_isp: "VARCHAR(180) DEFAULT ''",
       country: "VARCHAR(80) DEFAULT ''",
+      kick_reason: "VARCHAR(500) DEFAULT ''",
+      ban_reason: "VARCHAR(500) DEFAULT ''",
       muted_until: "DATETIME NULL",
       kicked_until: "DATETIME NULL",
       banned_until: "DATETIME NULL",
@@ -931,7 +949,7 @@ async function seedDefaults() {
   for (const rank of ranks.filter((rank) => rank !== "developer" && rank !== "bot")) {
     for (const tool of staffTools) {
       const specialDeveloperTool = ["intruderTool", "profileEditTool"].includes(tool);
-      const defaultAllowed = !specialDeveloperTool && (["chief", "manager", "inspector", "supervisor", "superadmin"].includes(rank)
+      const defaultAllowed = tool !== "viewUserIntel" && !specialDeveloperTool && (["chief", "manager", "inspector", "supervisor", "superadmin"].includes(rank)
         || (rank === "admin" && !["seeIp", "postNews", "editProfile"].includes(tool))
         || (rank === "moderator" && ["mute", "kick", "warn", "deleteMessage"].includes(tool))
         || (tool === "sendPm")

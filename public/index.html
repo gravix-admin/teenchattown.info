@@ -97,10 +97,6 @@
       <main class="main">
         <section class="view active" id="chatView">
           <div class="chat-shell">
-            <div class="chat-head">
-              <div><h2 id="roomTitle">Main Room</h2><p id="roomDescription" class="hidden">Central room</p></div>
-              <div class="chat-head-actions"><button id="pinnedButton" type="button">Pinned</button><button id="pollButton" type="button">Poll</button></div>
-            </div>
             <div class="messages" id="messages"></div>
             <form class="composer" id="messageForm">
               <div class="reply-box hidden" id="replyBox"><span></span><button type="button" id="clearReply">x</button></div>
@@ -212,14 +208,16 @@
         </div>
         <div class="profile-tabs">
           <button class="active" data-profile-tab="info">Overview</button>
+          <button data-profile-tab="about">About</button>
           <button data-profile-tab="wall">Wall</button>
           <button data-profile-tab="gallery">Gallery</button>
-          <button data-profile-tab="more">More</button>
+          <button id="profileIntelTabButton" class="hidden" data-profile-tab="intel">More</button>
         </div>
         <div class="profile-tab active" id="profileInfo"></div>
+        <div class="profile-tab" id="profileAbout"></div>
         <div class="profile-tab" id="profileWall"></div>
         <div class="profile-tab" id="profileGallery"></div>
-        <div class="profile-tab" id="profileMore"></div>
+        <div class="profile-tab" id="profileIntel"></div>
       </div>
       <div class="profile-action-overlay hidden" id="profileActionOverlay" aria-hidden="true"></div>
     </dialog>
@@ -236,7 +234,7 @@
           <button data-edit-jump="editIdentityCard" type="button"><span aria-hidden="true">P</span><strong>Profile</strong></button>
           <button data-edit-jump="editPresenceCard" type="button"><span aria-hidden="true">S</span><strong>Status</strong></button>
           <button data-edit-jump="editGalleryCard" type="button"><span aria-hidden="true">G</span><strong>Gallery</strong></button>
-          <button data-edit-jump="editSoundCard" type="button"><span aria-hidden="true">M</span><strong>Music</strong></button>
+          <button data-edit-jump="editPrivacyCard" type="button"><span aria-hidden="true">L</span><strong>Privacy</strong></button>
         </nav>
         <div class="edit-banner-preview" id="editBannerPreview">
           <div class="edit-cover-actions"><label class="edit-upload-pill">Upload cover<input id="bannerUpload" type="file" accept="image/*" /></label><button class="edit-remove-media" id="removeBannerButton" type="button">Remove cover</button></div>
@@ -272,6 +270,12 @@
           <label>Theme accent<input name="profileAccent" type="hidden" value="#ef4444" /><span class="theme-dots" id="themeAccentDots"><button class="active" data-accent="#ef4444" aria-label="Red accent" type="button"></button><button data-accent="#a855f7" aria-label="Purple accent" type="button"></button><button data-accent="#0ea5e9" aria-label="Blue accent" type="button"></button><button data-accent="#22c55e" aria-label="Green accent" type="button"></button><button data-accent="#f97316" aria-label="Orange accent" type="button"></button></span></label>
           <label class="toggle-row">Show online activity<input name="showOnlineStatus" type="checkbox" checked /></label>
         </section>
+        <section class="edit-profile-card profile-settings-card" id="editPrivacyCard">
+          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">L</span><div><strong>Profile privacy</strong><small>Choose what other members can see</small></div></div>
+          <label class="toggle-row">Show my country<input name="showCountry" type="checkbox" checked /></label>
+          <label class="toggle-row">Show my age<input name="showAge" type="checkbox" checked /></label>
+          <label class="toggle-row">Show my gender<input name="showGender" type="checkbox" checked /></label>
+        </section>
         <section class="edit-profile-card edit-gallery-card" id="editGalleryCard">
           <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">G</span><div><strong>Profile gallery</strong><small>Add and manage the photos shown on your profile</small></div></div>
           <div class="edit-gallery-uploader">
@@ -279,14 +283,6 @@
             <div class="edit-gallery-meta"><input id="editGalleryCaption" maxlength="180" placeholder="Add a caption (optional)" /><button class="primary" id="editGalleryAddButton" type="button">Add to gallery</button></div>
           </div>
           <div class="edit-gallery-grid" id="editGalleryGrid"><div class="edit-gallery-loading">Loading your gallery...</div></div>
-        </section>
-        <section class="edit-profile-card profile-sound-card" id="editSoundCard">
-          <div class="edit-section-heading"><span class="edit-card-logo" aria-hidden="true">M</span><div><strong>Profile soundtrack</strong><small>MP3, up to 10 MB. Playback stops the moment your profile closes.</small></div></div>
-          <div class="profile-sound-controls">
-            <div class="profile-sound-preview" id="profileSoundPreview"><span>No track added</span></div>
-            <label class="edit-upload-pill">Choose MP3<input id="profileMusicUpload" type="file" accept="audio/mpeg,.mp3" /></label>
-            <button class="edit-remove-media" id="removeProfileMusicButton" type="button">Remove track</button>
-          </div>
         </section>
         <details class="advanced-edit">
           <summary><span class="edit-card-logo" aria-hidden="true">+</span><span>More profile options</span></summary>
@@ -322,6 +318,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-  <script src="/script.js?v=20260714-pm-xo-visibility-v6"></script>
+  <script src="/script.js?v=20260714-rooms-profile-moderation-v7"></script>
   </body>
 </html>

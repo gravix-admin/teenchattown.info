@@ -43,11 +43,17 @@ async function fetchCountry(ip) {
 async function refreshUserLocation(userId, req) {
   const ip = clientIp(req);
   const headerCountry = countryFromHeaders(req);
+  const decodeHeader = (value) => {
+    try { return decodeURIComponent(String(value || "").replace(/\+/g, " ")); } catch (_error) { return String(value || ""); }
+  };
+  const city = decodeHeader(req.headers["cf-ipcity"] || req.headers["x-vercel-ip-city"]).slice(0, 120);
+  const region = decodeHeader(req.headers["cf-region"] || req.headers["x-vercel-ip-country-region"]).slice(0, 120);
+  const isp = String(req.headers["cf-as-organization"] || req.headers["x-isp"] || req.headers["x-vercel-ip-as-number"] || "").slice(0, 180);
   if (headerCountry) {
-    await pool.query("UPDATE users SET ip_address = ?, country = ? WHERE id = ?", [ip, headerCountry, userId]);
+    await pool.query("UPDATE users SET ip_address = ?, country = ?, ip_city = ?, ip_region = ?, ip_isp = ? WHERE id = ?", [ip, headerCountry, city, region, isp, userId]);
     return;
   }
-  await pool.query("UPDATE users SET ip_address = ? WHERE id = ?", [ip, userId]);
+  await pool.query("UPDATE users SET ip_address = ?, ip_city = ?, ip_region = ?, ip_isp = ? WHERE id = ?", [ip, city, region, isp, userId]);
   const detected = await fetchCountry(ip);
   if (detected) await pool.query("UPDATE users SET country = ? WHERE id = ?", [detected, userId]);
 }

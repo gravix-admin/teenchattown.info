@@ -57,10 +57,10 @@ function requireAuth(req, res, next) {
   if (req.authDatabaseError) return res.status(503).json({ error: "Database is reconnecting. Please try again in a moment." });
   if (!req.user) return res.status(401).json({ error: "Login required." });
   if (req.user.banned_until && new Date(req.user.banned_until) > new Date()) {
-    return res.status(403).json({ error: "This account is banned." });
+    return res.status(403).json({ error: "This account is banned.", code: "BANNED", reason: req.user.ban_reason || "This account has been banned." });
   }
   if (req.user.kicked_until && new Date(req.user.kicked_until) > new Date()) {
-    return res.status(403).json({ error: "You were temporarily kicked. Please try again later." });
+    return res.status(403).json({ error: "You were temporarily kicked.", code: "KICKED", reason: req.user.kick_reason || "You were temporarily removed by staff.", until: req.user.kicked_until });
   }
   next();
 }

@@ -75,15 +75,18 @@ router.get("/events", requireAuth, async (req, res) => {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [req.user.id]).catch((error) => {
+  await pool.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [req.user.id]).catch((error) => {
     console.error("Could not update last_seen for SSE connect:", error.message);
   });
   addClient(req.user.id, res);
-  broadcast("users-changed", { userId: req.user.id });
+  broadcast("users-changed", { userId: req.user.id, online: true });
+  const presenceTimer = setInterval(() => pool.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [req.user.id]).catch(() => {}), 45000);
+  presenceTimer.unref?.();
   req.on("close", async () => {
+    clearInterval(presenceTimer);
     removeClient(res);
-    await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [req.user.id]).catch(() => {});
-    broadcast("users-changed", { userId: req.user.id });
+    await pool.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [req.user.id]).catch(() => {});
+    broadcast("users-changed", { userId: req.user.id, online: false });
   });
 });
 
@@ -240,19 +243,65 @@ router.post("/messages/:messageId/pin", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+router.get("/rooms", requireAuth, async (req, res) => {
+  const [rooms] = await pool.query("SELECT id, name, description, image_url, is_pinned, staff_only, created_by, created_at, IF(password_hash IS NULL OR password_hash = '', 0, 1) AS locked FROM rooms WHERE staff_only = 0 OR ? = 1 ORDER BY CASE WHEN name = 'Main Room' THEN 0 ELSE 1 END, is_pinned DESC, name", [isStaff(req.user) ? 1 : 0]);
+  res.set("Cache-Control", "private, no-store");
+  res.json(rooms);
+});
+
 router.post("/rooms", requireAuth, roomUpload.single("image"), async (req, res) => {
   const [[permission]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = 'createRoom'", [req.user.rank_name]);
   if (req.user.rank_name !== "developer" && !permission?.allowed) return res.status(403).json({ error: "Your rank cannot create rooms." });
+  const name = String(req.body.name || "").trim().slice(0, 80);
+  if (name.length < 2) return res.status(400).json({ error: "Room name must be at least 2 characters." });
   const passwordHash = req.body.password ? await bcrypt.hash(String(req.body.password), 10) : null;
   const staffOnly = req.body.staffOnly === "true" || req.body.staffOnly === true ? 1 : 0;
   const imageUrl = req.file ? fileToDataUrl(req.file) : String(req.body.imageUrl || "").trim() || "/assets/room-main.svg";
   const [result] = await pool.query(
     "INSERT INTO rooms (name, description, image_url, password_hash, staff_only, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-    [String(req.body.name || "").slice(0, 80), String(req.body.description || "").slice(0, 255), imageUrl, passwordHash, staffOnly, req.user.id]
+    [name, String(req.body.description || "").slice(0, 255), imageUrl, passwordHash, staffOnly, req.user.id]
   );
   await pool.query("INSERT IGNORE INTO room_access (room_id, user_id) VALUES (?, ?)", [result.insertId, req.user.id]);
+  roomCache.clear();
   broadcast("rooms-changed", { id: result.insertId });
   res.status(201).json({ id: result.insertId });
+});
+
+router.patch("/rooms/:roomId/pin", requireAuth, async (req, res) => {
+  if (!["chief", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief and Developer can pin rooms." });
+  const room = await roomById(req.params.roomId);
+  if (!room) return res.status(404).json({ error: "Room not found." });
+  const pinned = req.body.pinned === undefined ? !Number(room.is_pinned) : Boolean(req.body.pinned);
+  await pool.query("UPDATE rooms SET is_pinned = ? WHERE id = ?", [pinned ? 1 : 0, room.id]);
+  roomCache.clear();
+  broadcast("rooms-changed", { id: room.id, pinned });
+  res.json({ ok: true, pinned });
+});
+
+router.delete("/rooms/:roomId", requireAuth, async (req, res) => {
+  if (!["chief", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief and Developer can delete rooms." });
+  const room = await roomById(req.params.roomId);
+  if (!room) return res.status(404).json({ error: "Room not found." });
+  if (String(room.name).toLowerCase() === "main room") return res.status(400).json({ error: "Main Room cannot be deleted." });
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query("DELETE mr FROM message_reactions mr JOIN messages m ON m.id = mr.message_id WHERE m.room_id = ?", [room.id]);
+    await connection.query("DELETE FROM messages WHERE room_id = ?", [room.id]);
+    await connection.query("DELETE FROM room_access WHERE room_id = ?", [room.id]);
+    await connection.query("DELETE FROM xo_games WHERE room_id = ?", [room.id]);
+    await connection.query("UPDATE reports SET room_id = NULL WHERE room_id = ?", [room.id]).catch(() => {});
+    await connection.query("DELETE FROM rooms WHERE id = ?", [room.id]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    throw error;
+  } finally {
+    connection.release();
+  }
+  roomCache.clear();
+  broadcast("rooms-changed", { id: room.id, deleted: true });
+  res.json({ ok: true });
 });
 
 router.post("/rooms/:roomId/join", requireAuth, async (req, res) => {

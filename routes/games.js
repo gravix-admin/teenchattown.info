@@ -139,7 +139,7 @@ router.post("/xo/:id/join", async (req, res) => {
   await sendGameMessage(game.room_id, { type: "joined", gameId: game.id, host: game.host_name, guest: game.guest_name, stake: XO_STAKE });
   broadcast("users-changed", { userId: game.host_id });
   broadcast("users-changed", { userId: game.guest_id });
-  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: "playing" });
+  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: "playing", game });
   res.json(game);
 });
 
@@ -161,7 +161,7 @@ router.post("/xo/:id/cancel", async (req, res) => {
     connection.release();
   }
   await sendGameMessage(game.room_id, { type: "cancelled", gameId: game.id, host: game.host_name });
-  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status });
+  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status, game });
   res.json(game);
 });
 
@@ -218,7 +218,7 @@ router.post("/xo/:id/move", async (req, res) => {
     broadcast("users-changed", { userId: game.host_id });
     broadcast("users-changed", { userId: game.guest_id });
   }
-  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status });
+  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status, game });
   res.json(game);
 });
 
@@ -255,7 +255,7 @@ router.post("/xo/:id/forfeit", async (req, res) => {
   });
   broadcast("users-changed", { userId: game.host_id });
   broadcast("users-changed", { userId: game.guest_id });
-  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status });
+  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status, game });
   res.json(game);
 });
 

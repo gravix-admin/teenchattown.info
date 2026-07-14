@@ -11,15 +11,16 @@ function calculateAge(dob) {
 
 function publicUser(user, viewer = null) {
   if (!user) return null;
-  const canSeePrivate = viewer && (Number(viewer.id) === Number(user.id) || ["developer", "chief", "admin"].includes(viewer.rank_name));
+  const self = viewer && Number(viewer.id) === Number(user.id);
+  const staffViewer = viewer && ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(viewer.rank_name);
   return {
     id: user.id,
     username: user.username,
     displayName: user.display_name,
-    email: canSeePrivate ? user.email : undefined,
-    dob: canSeePrivate ? user.dob : undefined,
-    age: user.age,
-    gender: user.gender,
+    email: self ? user.email : undefined,
+    dob: self ? user.dob : undefined,
+    age: self || Number(user.show_age ?? 1) === 1 ? user.age : undefined,
+    gender: self || Number(user.show_gender ?? 1) === 1 ? user.gender : undefined,
     rank: user.rank_name,
     avatarUrl: user.avatar_url,
     bannerUrl: user.banner_url,
@@ -29,6 +30,9 @@ function publicUser(user, viewer = null) {
     profileStatus: user.profile_status,
     profileAccent: user.profile_accent,
     showOnlineStatus: Boolean(user.show_online_status),
+    showCountry: Boolean(Number(user.show_country ?? 1)),
+    showAge: Boolean(Number(user.show_age ?? 1)),
+    showGender: Boolean(Number(user.show_gender ?? 1)),
     bio: user.bio,
     aboutMe: user.about_me,
     mood: user.mood,
@@ -47,14 +51,13 @@ function publicUser(user, viewer = null) {
     svipUntil: user.svip_until,
     rankUntil: user.rank_until,
     rankPlan: user.rank_plan,
-    ip: canSeePrivate ? user.ip_address : undefined,
-    country: user.country,
-    mutedUntil: user.muted_until,
-    kickedUntil: user.kicked_until,
-    bannedUntil: user.banned_until,
+    country: self || Number(user.show_country ?? 1) === 1 ? user.country : undefined,
+    mutedUntil: self || staffViewer ? user.muted_until : undefined,
+    kickedUntil: self || staffViewer ? user.kicked_until : undefined,
+    bannedUntil: self || staffViewer ? user.banned_until : undefined,
     deleteRequestedAt: user.delete_requested_at,
     lastSeen: user.last_seen,
-    online: user.show_online_status === 0 || user.profile_status === "Invisible" ? false : (user.last_seen ? Date.now() - new Date(user.last_seen).getTime() < 5 * 60 * 1000 : false),
+    online: user.show_online_status === 0 || user.profile_status === "Invisible" ? false : Boolean(Number(user.is_online || 0) && user.last_seen && Date.now() - new Date(user.last_seen).getTime() < 70 * 1000),
     createdAt: user.created_at,
   };
 }

@@ -22,6 +22,7 @@ const giftCatalog = {
 const durationLabels = { "7d": "7 days", "1m": "1 month", "3m": "3 months", lifetime: "Lifetime" };
 const durationDays = { "7d": 7, "1m": 30, "3m": 90, lifetime: null };
 const durationPower = { "7d": 0, "1m": 1, "3m": 2, lifetime: 3 };
+const muted = (user) => Boolean(user?.muted_until && new Date(user.muted_until) > new Date());
 const rankPlans = {
   "s-vip": {
     "7d": { diamonds: 50, gold: 1000 },
@@ -281,6 +282,7 @@ router.get("/profiles/:id/social", requireAuth, async (req, res) => {
 });
 
 router.post("/profiles/:id/wall", requireAuth, async (req, res) => {
+  if (muted(req.user)) return res.status(403).json({ error: "You are muted and cannot post messages." });
   const profileUserId = Number(req.params.id);
   const body = String(req.body.body || "").trim().slice(0, 500);
   if (!body) return res.status(400).json({ error: "Wall post cannot be empty." });
@@ -575,6 +577,7 @@ router.post("/news", requireAuth, newsUpload.single("image"), async (req, res) =
 });
 
 router.post("/news/:id/comments", requireAuth, async (req, res) => {
+  if (muted(req.user)) return res.status(403).json({ error: "You are muted and cannot post messages." });
   const body = String(req.body.body || "").trim().slice(0, 500);
   if (!body) return res.status(400).json({ error: "Comment cannot be empty." });
   const [[post]] = await pool.query("SELECT id FROM news_posts WHERE id = ?", [req.params.id]);

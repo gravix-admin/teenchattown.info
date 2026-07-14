@@ -23,9 +23,9 @@ const {
 const router = express.Router();
 const avatarUpload = imageUpload("avatars");
 const bannerUpload = imageUpload("banners");
-const exposedTools = ["postNews", "warn", "mute", "kick", "ban", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "intruderTool", "profileEditTool"];
-const userDirectoryColumns = `id, username, display_name, age, gender, rank_name, avatar_url,
-  profile_title, profile_status, show_online_status, mood, xp, gold, diamonds, country,
+const exposedTools = ["postNews", "warn", "mute", "kick", "ban", "deleteAccount", "changeRank", "editProfile", "customTitle", "invisibleStatus", "createRoom", "editRoom", "viewUserIntel", "intruderTool", "profileEditTool"];
+const userDirectoryColumns = `id, username, display_name, age, gender, show_age, show_gender, show_country, rank_name, avatar_url,
+  profile_title, profile_status, show_online_status, is_online, mood, xp, gold, diamonds, country,
   frame, last_seen, created_at`;
 const permissionCache = new Map();
 const directoryCache = { rows: null, at: 0 };
@@ -117,8 +117,8 @@ router.post("/login", async (req, res) => {
   if (!user || !(await bcrypt.compare(String(req.body.password || ""), user.password_hash))) {
     return res.status(401).json({ error: "Invalid login details." });
   }
-  if (user.banned_until && new Date(user.banned_until) > new Date()) return res.status(403).json({ error: "This account is banned." });
-  if (user.kicked_until && new Date(user.kicked_until) > new Date()) return res.status(403).json({ error: "You were temporarily kicked. Please try again later." });
+  if (user.banned_until && new Date(user.banned_until) > new Date()) return res.status(403).json({ error: "This account is banned.", code: "BANNED", reason: user.ban_reason || "This account has been banned." });
+  if (user.kicked_until && new Date(user.kicked_until) > new Date()) return res.status(403).json({ error: "You were temporarily kicked.", code: "KICKED", reason: user.kick_reason || "You were temporarily removed by staff.", until: user.kicked_until });
   await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [user.id]);
   refreshUserLocation(user.id, req).catch((error) => console.warn("Country detection failed:", error.message));
   res.json({ token: sign(user) });
@@ -188,7 +188,7 @@ router.get("/users", requireAuth, async (req, res) => {
 });
 
 router.patch("/me", requireAuth, async (req, res) => {
-  const allowed = ["displayName", "bio", "aboutMe", "mood", "theme", "chatBackground", "bubbleStyle", "usernameColor", "textColor", "animatedBannerUrl", "profileTitle", "profileStatus", "profileAccent", "showOnlineStatus"];
+  const allowed = ["displayName", "bio", "aboutMe", "mood", "theme", "chatBackground", "bubbleStyle", "usernameColor", "textColor", "animatedBannerUrl", "profileTitle", "profileStatus", "profileAccent", "showOnlineStatus", "showCountry", "showAge", "showGender"];
   const data = {};
   const limits = { displayName: 40, bio: 120, chatBackground: 40, profileTitle: 80, profileStatus: 40, profileAccent: 24, aboutMe: 1500 };
   const allowedChatBackgrounds = new Set(["moonlake", "autumn", "neon-city", "sunrise"]);
@@ -211,7 +211,7 @@ router.patch("/me", requireAuth, async (req, res) => {
         if (!(await hasProfileTool(req.user, "invisibleStatus"))) return res.status(403).json({ error: "Your rank does not have custom status access." });
         if (!allowedStatuses.has(status)) return res.status(400).json({ error: "Choose a valid profile status." });
       }
-      data[key] = key === "showOnlineStatus"
+      data[key] = ["showOnlineStatus", "showCountry", "showAge", "showGender"].includes(key)
         ? (req.body[key] ? 1 : 0)
         : String(req.body[key]).slice(0, limits[key] || 255);
     }
@@ -228,6 +228,9 @@ router.patch("/me", requireAuth, async (req, res) => {
     profileStatus: "profile_status",
     profileAccent: "profile_accent",
     showOnlineStatus: "show_online_status",
+    showCountry: "show_country",
+    showAge: "show_age",
+    showGender: "show_gender",
   };
   if (req.body.username !== undefined) {
     const username = normalizeUsername(req.body.username);

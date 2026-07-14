@@ -63,12 +63,6 @@ router.use(requireAuth);
 
 router.get("/dashboard", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
-  const [users] = await pool.query(
-    `SELECT id, username, rank_name
-     FROM users
-     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
-     ORDER BY created_at DESC LIMIT 60`
-  );
   const [permissions] = await pool.query("SELECT * FROM role_permissions");
   const [logs] = await pool.query(
     `SELECT al.*, u.username AS actor_name FROM admin_logs al JOIN users u ON u.id = al.actor_id ORDER BY al.created_at DESC LIMIT 25`
@@ -102,7 +96,6 @@ router.get("/dashboard", async (req, res) => {
   );
   res.json({
     stats: await adminStats(),
-    users,
     permissions,
     logs,
     reports,
@@ -179,31 +172,43 @@ router.post("/users/:id/moderate", async (req, res) => {
   const [[target]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.params.id]);
   if (!target) return res.status(404).json({ error: "User not found." });
   if (!isStaff(req.user) || !canControl(req.user.rank_name, target.rank_name)) return res.status(403).json({ error: "You cannot moderate that user." });
-  const action = req.body.action;
-  const tool = action === "delete" ? "deleteAccount" : action;
+  const action = String(req.body.action || "");
+  const tool = action === "delete" ? "deleteAccount" : action.replace(/^un/, "");
   if (!(await permission(req.user, tool))) return res.status(403).json({ error: "Your rank does not have this tool." });
-  const reason = String(req.body.reason || "").slice(0, 255);
-  const notify = async (title, body) => {
+  const reason = String(req.body.reason || "").trim().slice(0, 500);
+  const notify = async (title, body, extra = {}) => {
     const [result] = await pool.query(
       "INSERT INTO notifications (user_id, type, title, body) VALUES (?, ?, ?, ?)",
       [target.id, "moderation", title, body]
     );
     notifyUser(target.id, "notification", { id: result.insertId, type: "moderation", title, body });
-    notifyUser(target.id, "moderation", { action, title, body });
+    notifyUser(target.id, "moderation", { action, title, body, ...extra });
   };
   if (action === "warn") {
+    if (!reason) return res.status(400).json({ error: "Write a warning message first." });
     await notify("Staff warning", reason || "A staff member sent you a warning.");
   } else if (action === "mute") {
-    const minutes = [2, 5, 10, 60].includes(Number(req.body.minutes)) ? Number(req.body.minutes) : 10;
+    const minutes = [1, 2, 3, 5, 10, 15, 20, 60, 120, 1440, 2880, 144000].includes(Number(req.body.minutes)) ? Number(req.body.minutes) : 10;
     await pool.query("UPDATE users SET muted_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?", [minutes, target.id]);
     await notify("You are muted", `You cannot chat or send PMs for ${minutes} minutes.${reason ? ` Reason: ${reason}` : ""}`);
+  } else if (action === "unmute") {
+    await pool.query("UPDATE users SET muted_until = NULL WHERE id = ?", [target.id]);
+    await notify("Mute removed", "Your messaging access has been restored.");
   } else if (action === "kick") {
-    const minutes = [2, 5, 10, 60, 2880].includes(Number(req.body.minutes)) ? Number(req.body.minutes) : 10;
-    await pool.query("UPDATE users SET kicked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?", [minutes, target.id]);
-    await notify("You were kicked", `You cannot use the site for ${minutes === 2880 ? "2 days" : `${minutes} minutes`}.${reason ? ` Reason: ${reason}` : ""}`);
+    if (!reason) return res.status(400).json({ error: "Add a reason for the kick." });
+    const minutes = [1, 2, 3, 5, 10, 15, 20, 60, 120, 1440, 2880, 144000].includes(Number(req.body.minutes)) ? Number(req.body.minutes) : 10;
+    await pool.query("UPDATE users SET kicked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE), kick_reason = ? WHERE id = ?", [minutes, reason, target.id]);
+    await notify("You were kicked", `You cannot use the site for ${minutes === 2880 ? "2 days" : `${minutes} minutes`}. Reason: ${reason}`, { code: "KICKED", reason, until: new Date(Date.now() + minutes * 60000).toISOString() });
+  } else if (action === "unkick") {
+    await pool.query("UPDATE users SET kicked_until = NULL, kick_reason = '' WHERE id = ?", [target.id]);
+    await notify("Kick removed", "You can enter TeenChatTown again.");
   } else if (action === "ban") {
-    await pool.query("UPDATE users SET banned_until = '9999-12-31 23:59:59' WHERE id = ?", [target.id]);
-    await notify("Account banned", reason || "This account has been permanently banned.");
+    if (!reason) return res.status(400).json({ error: "Add a reason for the ban." });
+    await pool.query("UPDATE users SET banned_until = '9999-12-31 23:59:59', ban_reason = ? WHERE id = ?", [reason, target.id]);
+    await notify("Account banned", reason, { code: "BANNED", reason });
+  } else if (action === "unban") {
+    await pool.query("UPDATE users SET banned_until = NULL, ban_reason = '' WHERE id = ?", [target.id]);
+    await notify("Ban removed", "Your TeenChatTown account has been restored.");
   } else if (action === "delete") {
     await pool.query("DELETE FROM users WHERE id = ?", [target.id]);
   } else {
@@ -213,6 +218,22 @@ router.post("/users/:id/moderate", async (req, res) => {
   await log(req.user.id, action, "user", target.id, reason);
   broadcast("users-changed", { userId: target.id });
   res.json({ ok: true });
+});
+
+router.get("/users/:id/intel", async (req, res) => {
+  if (!isStaff(req.user) || !(await permission(req.user, "viewUserIntel"))) return res.status(403).json({ error: "Staff intelligence permission required." });
+  const [[target]] = await pool.query("SELECT id, username, rank_name, ip_address, ip_city, ip_region, ip_isp, country, last_seen, created_at FROM users WHERE id = ?", [req.params.id]);
+  if (!target) return res.status(404).json({ error: "User not found." });
+  if (Number(target.id) !== Number(req.user.id) && !canControl(req.user.rank_name, target.rank_name)) return res.status(403).json({ error: "You cannot view intelligence for that rank." });
+  res.json({
+    ip: target.ip_address || "Not captured",
+    city: target.ip_city || "Not detected",
+    region: target.ip_region || "Not detected",
+    country: target.country || "Not detected",
+    provider: target.ip_isp || "Not supplied by network",
+    lastSeen: target.last_seen,
+    createdAt: target.created_at,
+  });
 });
 
 router.post("/users/:id/profile-edit", requireProfileEditTool, async (req, res) => {

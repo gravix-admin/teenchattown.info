@@ -157,15 +157,19 @@ if (io) {
   io.on("connection", async (socket) => {
     socket.join(`user:${socket.user.id}`);
     socket.emit("ready", true);
-    await database.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [socket.user.id]).catch((error) => {
+    await database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch((error) => {
       console.error("Could not update last_seen for socket connect:", error.message);
     });
-    broadcast("users-changed", { userId: socket.user.id });
+    broadcast("users-changed", { userId: socket.user.id, online: true });
+    socket.on("presence", () => {
+      database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch(() => {});
+    });
     socket.on("disconnect", async () => {
-      await database.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [socket.user.id]).catch((error) => {
+      if (io.sockets.adapter.rooms.get(`user:${socket.user.id}`)?.size) return;
+      await database.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [socket.user.id]).catch((error) => {
         console.error("Could not update last_seen for socket disconnect:", error.message);
       });
-      broadcast("users-changed", { userId: socket.user.id });
+      broadcast("users-changed", { userId: socket.user.id, online: false });
     });
   });
 }
