@@ -45,6 +45,8 @@ function publicUser(user, viewer = null) {
     profileLikes: user.profile_likes,
     visitorCount: user.visitor_count,
     svipUntil: user.svip_until,
+    rankUntil: user.rank_until,
+    rankPlan: user.rank_plan,
     ip: canSeePrivate ? user.ip_address : undefined,
     country: user.country,
     mutedUntil: user.muted_until,
