@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node scripts/check-source-integrity.js && node server.js",
-    "check": "node scripts/check-source-integrity.js && node --check server.js && node --check routes/auth.js && node --check routes/chat.js && node --check routes/social.js && node --check routes/admin.js && node --check services/funCommandService.js && node --check public/script.js"
+    "check": "node scripts/check-source-integrity.js && node --check server.js && node --check routes/auth.js && node --check routes/chat.js && node --check routes/social.js && node --check routes/admin.js && node --check routes/games.js && node --check services/funCommandService.js && node --check services/ranks.js && node --check public/script.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
