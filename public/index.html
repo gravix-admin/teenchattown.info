@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css?v=20260713-town-games" />
+    <link rel="stylesheet" href="/styles.css?v=20260714-ranks-xo-voice-v3" />
   </head>
   <body>
     <section class="auth-screen" id="authScreen">
@@ -85,12 +85,12 @@
           <button data-view="wall" title="Friends Wall" aria-label="Friends Wall" type="button"><span class="nav-mark">W</span><span>Friends Wall</span></button>
           <button data-view="news" class="nav-news-button" title="News" aria-label="News" type="button"><span class="nav-mark">N</span><span>News</span><i id="newsBadge" class="menu-dot hidden" aria-hidden="true"></i></button>
           <button data-view="leaderboard" title="Leaderboard" aria-label="Leaderboard" type="button"><span class="nav-mark">L</span><span>Leaderboard</span></button>
-          <button data-view="tournament" title="Tournament" aria-label="Tournament" type="button"><span class="nav-mark">T</span><span>Tournament</span></button>
+          <button data-view="games" title="Games" aria-label="Games" type="button"><span class="nav-mark">G</span><span>Games</span></button>
           <button data-view="chatStore" title="Chat Store" aria-label="Chat Store" type="button"><span class="nav-mark">S</span><span>Chat Store</span></button>
           <p class="nav-kicker">Community</p>
           <button data-view="rules" title="Rules" aria-label="Rules" type="button"><span class="nav-mark">!</span><span>Rules</span></button>
           <button data-view="commands" title="Commands" aria-label="Commands" type="button"><span class="nav-mark">/</span><span>Commands</span></button>
-          <button data-view="vip" title="Buy S-VIP" aria-label="Buy S-VIP" type="button"><span class="nav-mark">V</span><span>Buy S-VIP</span></button>
+          <button data-view="vip" title="Buy Rank" aria-label="Buy Rank" type="button"><span class="nav-mark">R+</span><span>Buy Rank</span></button>
         </nav>
       </aside>
 
@@ -145,7 +145,7 @@
         <section class="view" id="profilesView"><div class="panel"><h2>Profiles</h2><div class="profile-grid" id="profileGrid"></div></div></section>
         <section class="view" id="newsView"><div class="panel news-panel"><div class="view-head"><h2>Town News <span id="newsTitleDot" class="inline-news-dot hidden" aria-hidden="true"></span></h2><div class="view-head-actions"><button id="newsComposeButton" class="news-add-button hidden" title="Post news" aria-label="Post news" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button><button data-close-view type="button">Close</button></div></div><div id="newsComposerArea" class="news-compose-area hidden"></div><div id="newsList"></div></div></section>
         <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
-        <section class="view" id="tournamentView"><div class="panel"><div class="view-head"><h2>Tournament</h2><button data-close-view type="button">Close</button></div><div class="empty-state"><strong>Tournament hub</strong><p class="muted">Tournament details will be added here later.</p></div></div></section>
+        <section class="view" id="gamesView"><div class="panel games-panel"><div class="view-head"><div><span class="eyebrow">Town Arcade</span><h2>Games</h2></div><button data-close-view type="button">Close</button></div><div id="gamesHub"><div class="view-loading"><span></span><strong>Opening games...</strong></div></div></div></section>
         <section class="view" id="chatStoreView"><div class="panel store-panel"><div class="view-head"><div><h2>Chat Store</h2><small class="store-free-note">Free for Premium</small></div><button data-close-view type="button">Close</button></div><div id="chatStore"><div class="store-loading">Opening store...</div></div></div></section>
         <section class="view" id="rulesView"><div class="panel policy-panel"><div class="view-head"><h2>TeenChatTown Chat Rules</h2><button data-close-view type="button">Close</button></div><p class="policy-intro">TeenChatTown is a community for respectful, safe, and enjoyable conversations. By using the platform, you agree to follow these rules.</p><div class="rules-list">
           <article><span>1</span><div><h3>Respect Everyone</h3><p>Treat all users with respect. Harassment, bullying, personal attacks, threats, discrimination, or hate speech are not allowed.</p></div></article>
@@ -167,12 +167,13 @@
               <article><span>1</span><div><h3><code>/bet</code></h3><p><code>/bet 100</code> risks gold for a chance to win up to 5x.</p><small>3-minute cooldown.</small></div></article>
               <article><span>2</span><div><h3><code>/confess</code></h3><p><code>/confess alexa i love you</code> posts the message through TownBot without showing who sent it.</p><small>The room sees the confession, never the sender.</small></div></article>
               <article><span>3</span><div><h3><code>/ship</code></h3><p><code>/ship @Ayush @Alex</code> calculates a stable compatibility score and verdict.</p><small>Use two existing usernames.</small></div></article>
-              <article><span>4</span><div><h3><code>/steal</code></h3><p><code>/steal @user</code> attempts to take 5-20% of their carried gold. Getting caught pays them compensation.</p><small>10-minute cooldown after each attempt.</small></div></article>
+              <article><span>4</span><div><h3><code>/steal</code></h3><p><code>/steal @user</code> attempts to take 5-20% of their carried gold. Chief and Developer are protected.</p><small>If caught, your chat is disabled for 1 minute. 10-minute cooldown.</small></div></article>
               <article><span>5</span><div><h3><code>/hunt</code></h3><p><code>/hunt</code> explores the town and finds 5-50 diamonds.</p><small>10-minute cooldown.</small></div></article>
+              <article><span>6</span><div><h3><code>/roast</code></h3><p><code>/roast "username"</code> asks TownBot for a random playful roast.</p><small>Use an existing username.</small></div></article>
             </div>
           </div>
         </section>
-        <section class="view" id="vipView"><div class="panel"><div class="view-head"><h2>Buy S-VIP</h2><button data-close-view type="button">Close</button></div><div class="vip-grid" id="vipGrid"></div></div></section>
+        <section class="view" id="vipView"><div class="panel rank-shop-panel"><div class="view-head"><div><span class="eyebrow">Upgrade your presence</span><h2>Buy Rank</h2></div><button data-close-view type="button">Close</button></div><div class="rank-shop-wallet" id="rankShopWallet"></div><div class="rank-selector" id="rankSelector"></div><div class="vip-grid rank-plan-grid" id="vipGrid"></div></div></section>
         <section class="view" id="adminView"><div class="admin-dashboard" id="adminDashboard"></div></section>
       </main>
 
@@ -182,9 +183,11 @@
             <button class="active" data-user-tab="all" title="All users" type="button"><svg viewBox="0 0 24 24"><path d="M7 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm10 1a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM7 13c-4 0-6 2.2-6 5v1h12v-1c0-2.8-2-5-6-5Zm10 .5c-1.1 0-2.1.2-2.9.6 1.2 1 1.9 2.4 1.9 3.9v1h7v-1c0-2.5-2-4.5-6-4.5Z"/></svg></button>
             <button data-user-tab="friends" title="Friends" type="button"><svg viewBox="0 0 24 24"><path d="M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5Zm8-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg></button>
             <button data-user-tab="staff" title="Staff" type="button"><svg viewBox="0 0 24 24"><path d="M12 2 20 6v6c0 5-3.4 9.4-8 10-4.6-.6-8-5-8-10V6l8-4Zm-1 6v4H7l6 6v-4h4z"/></svg></button>
+            <button data-user-tab="search" title="Search users" aria-label="Search users" type="button"><svg viewBox="0 0 24 24"><path d="m21 21-4.4-4.4m2.4-5.1A7.5 7.5 0 1 1 4 11.5a7.5 7.5 0 0 1 15 0Z"/></svg></button>
           </div>
           <button id="closeRightPanel" class="panel-close-button" title="Close users" type="button"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
         </div>
+        <div class="user-search-shell hidden" id="userSearchShell"><label>Username<input id="userListSearch" type="search" placeholder="Search people..." autocomplete="off" /></label></div>
         <div id="userList"></div>
       </aside>
     </section>
@@ -259,7 +262,7 @@
           </div>
         </section>
         <section class="edit-profile-card edit-presence-card" id="editPresenceCard" data-status-field>
-          <div class="edit-section-heading"><span class="edit-card-logo presence-logo" aria-hidden="true"></span><div><strong>Presence</strong><small>Premium, Chief, and Developer status controls</small></div></div>
+          <div class="edit-section-heading"><span class="edit-card-logo presence-logo" aria-hidden="true"></span><div><strong>Presence</strong><small>Rank-based status controls</small></div></div>
           <div class="edit-presence-grid">
             <label><span>Profile status</span><select name="profileStatus"><option>Online</option><option>Away</option><option>Busy</option><option>Be right back</option><option>Listening to music</option><option>Watching video</option><option>Gaming</option><option>Friendly</option><option>Sad</option><option>Invisible</option></select></label>
             <div class="status-preview" id="statusPreview"><span></span><div><strong>Online</strong><small>Shown beside your name</small></div></div>
@@ -320,6 +323,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js?v=20260713-town-games"></script>
+    <script src="/script.js?v=20260714-ranks-xo-voice-v3"></script>
   </body>
 </html>
