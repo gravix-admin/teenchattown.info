@@ -25,6 +25,18 @@ function imageUpload(folder) {
   });
 }
 
+function chatUpload(folder) {
+  return multer({
+    storage: storage(folder),
+    limits: { fileSize: 4 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowedAudio = ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "video/webm"].includes(file.mimetype);
+      if (!file.mimetype.startsWith("image/") && !allowedAudio) return cb(new Error("Only images and voice messages are allowed."));
+      cb(null, true);
+    },
+  });
+}
+
 function audioUpload(folder) {
   return multer({
     storage: storage(folder),
@@ -44,4 +56,4 @@ function fileToDataUrl(file) {
   return `/uploads/${encodeURIComponent(folder)}/${encodeURIComponent(file.filename)}`;
 }
 
-module.exports = { audioUpload, imageUpload, fileToDataUrl };
+module.exports = { audioUpload, chatUpload, imageUpload, fileToDataUrl };
