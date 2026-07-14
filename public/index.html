@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-    <link rel="stylesheet" href="/styles.css?v=20260714-ranks-xo-voice-v3" />
+    <link rel="stylesheet" href="/styles.css?v=20260714-xo-pm-tools-v4" />
   </head>
   <body>
     <section class="auth-screen" id="authScreen">
@@ -102,7 +102,6 @@
               <div class="chat-head-actions"><button id="pinnedButton" type="button">Pinned</button><button id="pollButton" type="button">Poll</button></div>
             </div>
             <div class="messages" id="messages"></div>
-            <div class="typing" id="typingText">No one is typing</div>
             <form class="composer" id="messageForm">
               <div class="reply-box hidden" id="replyBox"><span></span><button type="button" id="clearReply">x</button></div>
               <input id="messageAttachment" class="hidden" type="file" accept="image/*" />
@@ -323,6 +322,6 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/script.js?v=20260714-ranks-xo-voice-v3"></script>
+    <script src="/script.js?v=20260714-xo-pm-tools-v4"></script>
   </body>
 </html>

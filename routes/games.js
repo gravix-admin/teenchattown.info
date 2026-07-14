@@ -7,6 +7,7 @@ const { ensureTownBot, roomMessage } = require("../services/betService");
 const router = express.Router();
 const XO_PREFIX = "::xo:";
 const XO_STAKE = 500;
+const XO_WAIT_MINUTES = 1;
 const WIN_LINES = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
   [0, 3, 6], [1, 4, 7], [2, 5, 8],
@@ -32,7 +33,8 @@ async function sendGameMessage(roomId, payload) {
 
 async function gameDetails(connection, gameId) {
   const [[game]] = await connection.query(
-    `SELECT g.*, h.username AS host_name, p.username AS guest_name, w.username AS winner_name
+    `SELECT g.*, DATE_ADD(g.created_at, INTERVAL ${XO_WAIT_MINUTES} MINUTE) AS expires_at,
+            h.username AS host_name, p.username AS guest_name, w.username AS winner_name
      FROM xo_games g
      JOIN users h ON h.id = g.host_id
      LEFT JOIN users p ON p.id = g.guest_id
@@ -41,6 +43,15 @@ async function gameDetails(connection, gameId) {
     [gameId]
   );
   return game || null;
+}
+
+async function expireWaitingGames(connection = pool) {
+  await connection.query(
+    `UPDATE xo_games
+     SET status = 'expired'
+     WHERE status = 'waiting'
+       AND created_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${XO_WAIT_MINUTES} MINUTE)`
+  );
 }
 
 function winnerSymbol(board) {
@@ -54,9 +65,10 @@ router.use(requireAuth);
 
 router.get("/xo", async (req, res) => {
   const roomId = Number(req.query.roomId || 0);
-  await pool.query("UPDATE xo_games SET status = 'expired' WHERE status = 'waiting' AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)");
+  await expireWaitingGames();
   const [games] = await pool.query(
-    `SELECT g.*, h.username AS host_name, p.username AS guest_name, w.username AS winner_name
+    `SELECT g.*, DATE_ADD(g.created_at, INTERVAL ${XO_WAIT_MINUTES} MINUTE) AS expires_at,
+            h.username AS host_name, p.username AS guest_name, w.username AS winner_name
      FROM xo_games g
      JOIN users h ON h.id = g.host_id
      LEFT JOIN users p ON p.id = g.guest_id
@@ -70,12 +82,13 @@ router.get("/xo", async (req, res) => {
 });
 
 router.get("/xo/:id", async (req, res) => {
+  await expireWaitingGames();
   const game = await gameDetails(pool, req.params.id);
   if (!game) return res.status(404).json({ error: "X-O match not found." });
   if (game.status === "playing" && ![game.host_id, game.guest_id].map(Number).includes(Number(req.user.id)) && !isStaff(req.user)) {
     return res.status(403).json({ error: "This X-O match is private to its players." });
   }
-  res.json({ ...game, stake: XO_STAKE });
+  res.json({ ...game, stake: XO_STAKE, waitMinutes: XO_WAIT_MINUTES });
 });
 
 router.post("/xo", async (req, res) => {
@@ -84,13 +97,13 @@ router.post("/xo", async (req, res) => {
   if (!room || (Number(room.staff_only) === 1 && !isStaff(req.user))) return res.status(403).json({ error: "Choose a room you can enter." });
   const [[account]] = await pool.query("SELECT gold FROM users WHERE id = ?", [req.user.id]);
   if (Number(account?.gold || 0) < XO_STAKE) return res.status(400).json({ error: `You need ${XO_STAKE} gold to start an X-O match.` });
-  await pool.query("UPDATE xo_games SET status = 'expired' WHERE status = 'waiting' AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 MINUTE)");
+  await expireWaitingGames();
   const [[active]] = await pool.query("SELECT id FROM xo_games WHERE (host_id = ? OR guest_id = ?) AND status IN ('waiting','playing') LIMIT 1", [req.user.id, req.user.id]);
   if (active) return res.status(400).json({ error: "Finish your active X-O match first.", gameId: active.id });
   const [result] = await pool.query("INSERT INTO xo_games (room_id, host_id) VALUES (?, ?)", [roomId, req.user.id]);
   await sendGameMessage(roomId, { type: "invite", gameId: result.insertId, host: req.user.username, stake: XO_STAKE });
   broadcast("xo-game", { gameId: result.insertId, roomId, status: "waiting" });
-  res.status(201).json(await gameDetails(pool, result.insertId));
+  res.status(201).json({ ...(await gameDetails(pool, result.insertId)), stake: XO_STAKE, waitMinutes: XO_WAIT_MINUTES });
 });
 
 router.post("/xo/:id/join", async (req, res) => {
@@ -98,6 +111,12 @@ router.post("/xo/:id/join", async (req, res) => {
   let game;
   try {
     await connection.beginTransaction();
+    await connection.query(
+      `UPDATE xo_games SET status = 'expired'
+       WHERE id = ? AND status = 'waiting'
+         AND created_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${XO_WAIT_MINUTES} MINUTE)`,
+      [req.params.id]
+    );
     [[game]] = await connection.query("SELECT * FROM xo_games WHERE id = ? FOR UPDATE", [req.params.id]);
     if (!game || game.status !== "waiting") throw gameError("This X-O invitation is no longer open.", 409);
     if (Number(game.host_id) === Number(req.user.id)) throw gameError("You cannot join your own X-O invitation.");
@@ -121,6 +140,28 @@ router.post("/xo/:id/join", async (req, res) => {
   broadcast("users-changed", { userId: game.host_id });
   broadcast("users-changed", { userId: game.guest_id });
   broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: "playing" });
+  res.json(game);
+});
+
+router.post("/xo/:id/cancel", async (req, res) => {
+  const connection = await pool.getConnection();
+  let game;
+  try {
+    await connection.beginTransaction();
+    [[game]] = await connection.query("SELECT * FROM xo_games WHERE id = ? FOR UPDATE", [req.params.id]);
+    if (!game || game.status !== "waiting") throw gameError("Only an unstarted X-O match can be cancelled.", 409);
+    if (Number(game.host_id) !== Number(req.user.id)) throw gameError("Only the player who opened this match can cancel it.", 403);
+    await connection.query("UPDATE xo_games SET status = 'cancelled' WHERE id = ?", [game.id]);
+    await connection.commit();
+    game = await gameDetails(pool, game.id);
+  } catch (error) {
+    await connection.rollback().catch(() => {});
+    return res.status(error.status || 400).json({ error: error.message || "Could not cancel this X-O match." });
+  } finally {
+    connection.release();
+  }
+  await sendGameMessage(game.room_id, { type: "cancelled", gameId: game.id, host: game.host_name });
+  broadcast("xo-game", { gameId: game.id, roomId: game.room_id, status: game.status });
   res.json(game);
 });
 

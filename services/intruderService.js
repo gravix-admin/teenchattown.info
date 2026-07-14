@@ -30,6 +30,16 @@ function sanitizeRange(minValue, maxValue) {
   return min <= max ? { min, max } : { min: max, max: min };
 }
 
+function sanitizeBotName(value, fallback = BOT_NAME) {
+  const name = String(value ?? fallback).replace(/\s+/g, " ").trim().slice(0, 40);
+  return name || fallback;
+}
+
+function sanitizeBotAvatar(value, fallback = BOT_AVATAR) {
+  const avatar = String(value ?? fallback).trim().slice(0, 500);
+  return avatar || fallback;
+}
+
 function randomPoints() {
   return Math.floor(Math.random() * 91) + 10;
 }
@@ -74,8 +84,8 @@ async function ensureBotUser() {
   const [rows] = await pool.query("SELECT id FROM users WHERE LOWER(username) = 'intruder' LIMIT 1");
   if (rows.length) {
     await pool.query(
-      "UPDATE users SET rank_name = 'bot', display_name = ?, avatar_url = ?, bio = ?, profile_status = 'Invisible', show_online_status = 0 WHERE id = ?",
-      [BOT_NAME, BOT_AVATAR, "Intruder game bot.", rows[0].id]
+      "UPDATE users SET rank_name = 'bot', bio = ?, profile_status = 'Invisible', show_online_status = 0 WHERE id = ?",
+      ["Intruder game bot.", rows[0].id]
     );
     return rows[0].id;
   }
@@ -98,8 +108,13 @@ async function ensureSettings() {
     [DEFAULT_MAX_INTERVAL_MINUTES, DEFAULT_MIN_INTERVAL_MINUTES, DEFAULT_MAX_INTERVAL_MINUTES, botUserId, BOT_NAME, BOT_AVATAR]
   );
   await pool.query(
-    "UPDATE intruder_settings SET bot_user_id = ?, bot_name = ?, bot_avatar_url = ? WHERE id = 1",
-    [botUserId, BOT_NAME, BOT_AVATAR]
+    "UPDATE intruder_settings SET bot_user_id = ? WHERE id = 1",
+    [botUserId]
+  );
+  const [[settings]] = await pool.query("SELECT bot_name, bot_avatar_url FROM intruder_settings WHERE id = 1");
+  await pool.query(
+    "UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?",
+    [settings?.bot_name || BOT_NAME, settings?.bot_avatar_url || BOT_AVATAR, botUserId]
   );
 }
 
@@ -233,20 +248,35 @@ function startIntruderLoop() {
   scheduleTick(1500);
 }
 
-async function updateIntruderSettings({ enabled, minIntervalMinutes, maxIntervalMinutes, intervalMinutes }) {
+async function updateIntruderSettings({ enabled, minIntervalMinutes, maxIntervalMinutes, intervalMinutes, botName, botAvatarUrl }) {
   await ensureSettings();
+  const current = await getSettings();
   const legacy = sanitizeInterval(intervalMinutes, DEFAULT_MAX_INTERVAL_MINUTES);
   const range = sanitizeRange(minIntervalMinutes ?? legacy, maxIntervalMinutes ?? legacy);
+  const nextBotName = sanitizeBotName(botName, current.bot_name || BOT_NAME);
+  const nextBotAvatarUrl = sanitizeBotAvatar(botAvatarUrl, current.bot_avatar_url || BOT_AVATAR);
   if (enabled) {
     const nextSpawn = randomNextDate(range.min, range.max);
     await pool.query(
-      "UPDATE intruder_settings SET enabled = 1, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, next_spawn_at = ? WHERE id = 1",
-      [range.max, range.min, range.max, mysqlUtc(nextSpawn)]
+      "UPDATE intruder_settings SET enabled = 1, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, bot_name = ?, bot_avatar_url = ?, next_spawn_at = ? WHERE id = 1",
+      [range.max, range.min, range.max, nextBotName, nextBotAvatarUrl, mysqlUtc(nextSpawn)]
     );
   } else {
-    await pool.query("UPDATE intruder_settings SET enabled = 0, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, next_spawn_at = NULL WHERE id = 1", [range.max, range.min, range.max]);
+    await pool.query(
+      "UPDATE intruder_settings SET enabled = 0, interval_minutes = ?, min_interval_minutes = ?, max_interval_minutes = ?, bot_name = ?, bot_avatar_url = ?, next_spawn_at = NULL WHERE id = 1",
+      [range.max, range.min, range.max, nextBotName, nextBotAvatarUrl]
+    );
   }
-  broadcast("intruder-settings-updated", { enabled: Boolean(enabled), minIntervalMinutes: range.min, maxIntervalMinutes: range.max });
+  if (current.bot_user_id) {
+    await pool.query("UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?", [nextBotName, nextBotAvatarUrl, current.bot_user_id]);
+  }
+  broadcast("intruder-settings-updated", {
+    enabled: Boolean(enabled),
+    minIntervalMinutes: range.min,
+    maxIntervalMinutes: range.max,
+    botName: nextBotName,
+    botAvatarUrl: nextBotAvatarUrl,
+  });
   return getIntruderState();
 }
 

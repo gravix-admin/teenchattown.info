@@ -240,11 +240,6 @@ router.post("/messages/:messageId/pin", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post("/typing", requireAuth, (req, res) => {
-  broadcast("typing", { userId: req.user.id, username: req.user.username, roomId: req.body.roomId });
-  res.json({ ok: true });
-});
-
 router.post("/rooms", requireAuth, roomUpload.single("image"), async (req, res) => {
   const [[permission]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = 'createRoom'", [req.user.rank_name]);
   if (req.user.rank_name !== "developer" && !permission?.allowed) return res.status(403).json({ error: "Your rank cannot create rooms." });
@@ -323,9 +318,22 @@ router.post("/private-messages", requireAuth, upload.single("attachment"), async
   const body = String(form.body || "").trim().slice(0, 1200);
   const attachmentUrl = req.file ? fileToDataUrl(req.file) : null;
   if (!body && !attachmentUrl) return res.status(400).json({ error: "Message or image required." });
+  const replyToId = Number(form.replyToId) || null;
+  let replyTarget = null;
+  if (replyToId) {
+    [[replyTarget]] = await pool.query(
+      `SELECT pm.id, pm.sender_id, pm.body, pm.attachment_url, u.username AS sender_username
+       FROM private_messages pm
+       JOIN users u ON u.id = pm.sender_id
+       WHERE pm.id = ? AND pm.deleted_at IS NULL
+         AND ((pm.sender_id = ? AND pm.receiver_id = ?) OR (pm.sender_id = ? AND pm.receiver_id = ?))`,
+      [replyToId, req.user.id, receiverId, receiverId, req.user.id]
+    );
+    if (!replyTarget) return res.status(400).json({ error: "That private message is no longer available to reply to." });
+  }
   const [result] = await pool.query(
-    "INSERT INTO private_messages (sender_id, receiver_id, body, attachment_url, attachment_type) VALUES (?, ?, ?, ?, ?)",
-    [req.user.id, receiverId, body, attachmentUrl, req.file?.mimetype || null]
+    "INSERT INTO private_messages (sender_id, receiver_id, body, attachment_url, attachment_type, reply_to_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [req.user.id, receiverId, body, attachmentUrl, req.file?.mimetype || null, replyToId]
   );
   const payload = {
     id: result.insertId,
@@ -340,6 +348,14 @@ router.post("/private-messages", requireAuth, upload.single("attachment"), async
     attachmentUrl,
     attachment_type: req.file?.mimetype || null,
     attachmentType: req.file?.mimetype || null,
+    reply_to_id: replyToId,
+    replyToId,
+    reply_body: replyTarget?.body || null,
+    replyBody: replyTarget?.body || null,
+    reply_attachment_url: replyTarget?.attachment_url || null,
+    replyAttachmentUrl: replyTarget?.attachment_url || null,
+    reply_sender_username: replyTarget?.sender_username || null,
+    replySenderUsername: replyTarget?.sender_username || null,
     created_at: new Date(),
     createdAt: new Date()
   };
@@ -351,10 +367,14 @@ router.get("/private-messages/:userId", requireAuth, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 20), 80);
   const [rows] = await pool.query(
     `SELECT recent.* FROM (
-       SELECT pm.*, su.username AS sender_username, ru.username AS receiver_username
+       SELECT pm.*, su.username AS sender_username, ru.username AS receiver_username,
+              reply.body AS reply_body, reply.attachment_url AS reply_attachment_url,
+              reply_sender.username AS reply_sender_username
        FROM private_messages pm
        JOIN users su ON su.id = pm.sender_id
        JOIN users ru ON ru.id = pm.receiver_id
+       LEFT JOIN private_messages reply ON reply.id = pm.reply_to_id AND reply.deleted_at IS NULL
+       LEFT JOIN users reply_sender ON reply_sender.id = reply.sender_id
        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) AND deleted_at IS NULL
        ORDER BY pm.created_at DESC
        LIMIT ?
@@ -364,6 +384,16 @@ router.get("/private-messages/:userId", requireAuth, async (req, res) => {
   );
   await pool.query("UPDATE private_messages SET read_at = NOW() WHERE receiver_id = ? AND sender_id = ? AND read_at IS NULL", [req.user.id, req.params.userId]);
   res.json(rows);
+});
+
+router.post("/private-messages/:userId/read", requireAuth, async (req, res) => {
+  const otherUserId = Number(req.params.userId);
+  if (!otherUserId || otherUserId === Number(req.user.id)) return res.status(400).json({ error: "Choose another private chat." });
+  const [result] = await pool.query(
+    "UPDATE private_messages SET read_at = NOW() WHERE receiver_id = ? AND sender_id = ? AND read_at IS NULL AND deleted_at IS NULL",
+    [req.user.id, otherUserId]
+  );
+  res.json({ ok: true, read: Number(result.affectedRows || 0) });
 });
 
 router.delete("/private-messages/:userId", requireAuth, async (req, res) => {

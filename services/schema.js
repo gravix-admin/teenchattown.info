@@ -228,6 +228,7 @@ async function initSchema() {
       body TEXT NULL,
       attachment_url MEDIUMTEXT NULL,
       attachment_type VARCHAR(40) NULL,
+      reply_to_id INT NULL,
       read_at DATETIME NULL,
       deleted_at DATETIME NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -602,6 +603,7 @@ async function migrateExistingTables() {
       body: "TEXT NULL",
       attachment_url: "MEDIUMTEXT NULL",
       attachment_type: "VARCHAR(40) NULL",
+      reply_to_id: "INT NULL",
       read_at: "DATETIME NULL",
       deleted_at: "DATETIME NULL",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
@@ -775,6 +777,7 @@ async function migrateExistingTables() {
   await ensureIndex("messages", "idx_messages_retention", "`created_at`, `is_pinned`");
   await ensureIndex("private_messages", "idx_pm_receiver_read_deleted", "`receiver_id`, `read_at`, `deleted_at`");
   await ensureIndex("private_messages", "idx_pm_pair_deleted_created", "`sender_id`, `receiver_id`, `deleted_at`, `created_at`");
+  await ensureIndex("private_messages", "idx_pm_reply", "`reply_to_id`");
   await ensureIndex("private_messages", "idx_pm_retention", "`created_at`");
   await ensureIndex("notifications", "idx_notifications_user_created", "`user_id`, `created_at`");
   await ensureIndex("news_comments", "idx_news_comments_news_created", "`news_id`, `created_at`");
@@ -982,7 +985,7 @@ async function seedDefaults() {
     [intruderBotId]
   );
   await pool.query(
-    "UPDATE intruder_settings SET bot_user_id = ?, bot_name = 'Intruder', bot_avatar_url = '/assets/intruder-bot.png' WHERE id = 1",
+    "UPDATE intruder_settings SET bot_user_id = ? WHERE id = 1",
     [intruderBotId]
   );
 
