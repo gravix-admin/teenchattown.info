@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const pool = require("../database");
+const { rankPower, isStaffRank } = require("../services/ranks");
 
 const USER_CACHE_TTL_MS = 15000;
 const userCache = new Map();
@@ -64,12 +65,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-function rankPower(rank) {
-  const normalized = rank === "super visor" ? "supervisor" : rank;
-  const order = ["bot", "user", "vip", "s-vip", "king", "queen", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
-  return order.indexOf(normalized);
-}
-
 function canControl(actorRank, targetRank) {
   if (targetRank === "bot") return false;
   if (actorRank === "developer") return targetRank !== "developer";
@@ -85,7 +80,7 @@ function canControl(actorRank, targetRank) {
 }
 
 function isStaff(user) {
-  return ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(user?.rank_name);
+  return isStaffRank(user?.rank_name);
 }
 
 module.exports = { attachUser, requireAuth, canControl, isStaff, rankPower, invalidateUserCache, cacheUser };
