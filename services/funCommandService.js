@@ -7,9 +7,22 @@ const CONFESS_PREFIX = "::confess:";
 const SHIP_PREFIX = "::ship:";
 const STEAL_PREFIX = "::steal:";
 const HUNT_PREFIX = "::hunt:";
-const FUN_PREFIXES = [CONFESS_PREFIX, SHIP_PREFIX, STEAL_PREFIX, HUNT_PREFIX];
+const ROAST_PREFIX = "::roast:";
+const FUN_PREFIXES = [CONFESS_PREFIX, SHIP_PREFIX, STEAL_PREFIX, HUNT_PREFIX, ROAST_PREFIX];
 const ECONOMY_COOLDOWN_SECONDS = 10 * 60;
 const MAX_BALANCE = 2000000000;
+const ROASTS = [
+  "has the confidence of a loading bar stuck at 99%.",
+  "brings main-character energy to a background-tab performance.",
+  "could lose an argument to their own autocorrect.",
+  "is proof that even Wi-Fi signals can have stronger connections.",
+  "has more plot twists than actual plans.",
+  "walked into the room and the vibe asked for a minute.",
+  "is running on premium confidence and free-trial logic.",
+  "could make a shortcut take longer.",
+  "has a PhD in replying after the conversation is over.",
+  "is so mysterious even their search history has questions.",
+];
 
 function commandError(message, status = 400) {
   const error = new Error(message);
@@ -125,6 +138,7 @@ async function handleSteal(roomId, user, targetName) {
     [targetName]
   );
   if (!targetLookup || targetLookup.rank_name === "bot") throw commandError("Choose a valid user to steal from.", 404);
+  if (["chief", "developer"].includes(targetLookup.rank_name)) throw commandError(`${targetLookup.username}'s rank is protected from /steal.`, 403);
   if (Number(targetLookup.id) === Number(user.id)) throw commandError("You cannot steal from yourself.");
 
   const connection = await pool.getConnection();
@@ -156,12 +170,9 @@ async function handleSteal(roomId, user, targetName) {
       await connection.query("UPDATE users SET gold = ? WHERE id = ?", [targetGold, target.id]);
       payload = { success: true, actor: actor.username, target: target.username, amount, percent, line: "Clean getaway. Nobody saw a thing." };
     } else {
-      const amount = Math.min(Number(actor.gold), Math.max(1, Math.floor(Number(actor.gold) * percent / 100)));
-      actorGold = Number(actor.gold) - amount;
-      const targetGold = Math.min(MAX_BALANCE, Number(target.gold) + amount);
-      await connection.query("UPDATE users SET gold = ?, last_steal_at = UTC_TIMESTAMP() WHERE id = ?", [actorGold, actor.id]);
-      await connection.query("UPDATE users SET gold = ? WHERE id = ?", [targetGold, target.id]);
-      payload = { success: false, actor: actor.username, target: target.username, amount, percent, line: "Caught red-handed. Compensation delivered." };
+      actorGold = Number(actor.gold);
+      await connection.query("UPDATE users SET last_steal_at = UTC_TIMESTAMP(), muted_until = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE id = ?", [actor.id]);
+      payload = { success: false, actor: actor.username, target: target.username, amount: 0, percent, mutedSeconds: 60, line: "Caught red-handed. Chat disabled for 1 minute." };
     }
     await connection.commit();
   } catch (error) {
@@ -173,6 +184,18 @@ async function handleSteal(roomId, user, targetName) {
   invalidateUserCache(user.id);
   invalidateUserCache(targetLookup.id);
   return sendBotResult(roomId, STEAL_PREFIX, payload, { gold: actorGold });
+}
+
+async function handleRoast(roomId, targetName) {
+  const [[target]] = await pool.query(
+    "SELECT id, username FROM users WHERE LOWER(username) = LOWER(?) AND rank_name <> 'bot' LIMIT 1",
+    [targetName]
+  );
+  if (!target) throw commandError("Choose a valid TeenChatTown username to roast.", 404);
+  return sendBotResult(roomId, ROAST_PREFIX, {
+    username: target.username,
+    roast: ROASTS[randomInt(0, ROASTS.length - 1)],
+  });
 }
 
 async function handleFunCommand(roomId, user, body) {
@@ -193,6 +216,12 @@ async function handleFunCommand(roomId, user, body) {
 
   if (/^\/hunt\s*$/i.test(body)) return handleHunt(roomId, user);
   if (/^\/hunt(?:\s|$)/i.test(body)) throw commandError("Use /hunt with no extra text.");
+
+  const roast = body.match(/^\/roast\s+(?:["']([^"']+)["']|@?([a-zA-Z0-9_]{3,18}))\s*$/i);
+  if (/^\/roast(?:\s|$)/i.test(body)) {
+    if (!roast) throw commandError('Use /roast "username".');
+    return handleRoast(roomId, String(roast[1] || roast[2]).trim());
+  }
   return null;
 }
 
@@ -201,6 +230,7 @@ module.exports = {
   SHIP_PREFIX,
   STEAL_PREFIX,
   HUNT_PREFIX,
+  ROAST_PREFIX,
   FUN_PREFIXES,
   handleFunCommand,
 };
