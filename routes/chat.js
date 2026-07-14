@@ -92,36 +92,32 @@ router.get("/events", requireAuth, async (req, res) => {
 
 router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 20), 80);
-  const [rows] = await pool.query(
-    `SELECT recent.* FROM (
+  const [resultRows] = await pool.query(
+    `SELECT recent.*, mr.emoji AS reaction_emoji FROM (
        SELECT m.*, u.username, u.rank_name, u.profile_title, u.avatar_url, u.username_color, u.text_color, u.bubble_style, u.frame
        FROM messages m
        JOIN users u ON u.id = m.user_id
        WHERE m.room_id = ? AND m.deleted_at IS NULL
        ORDER BY m.created_at DESC
        LIMIT ?
-    ) recent
+     ) recent
+     LEFT JOIN message_reactions mr ON mr.message_id = recent.id
      ORDER BY recent.is_pinned DESC, recent.created_at ASC`,
     [req.params.roomId, limit]
   );
-  const messageIds = rows.map((row) => Number(row.id)).filter(Boolean);
-  if (messageIds.length) {
-    const [reactionRows] = await pool.query(
-      `SELECT message_id, emoji, COUNT(*) AS count
-       FROM message_reactions
-       WHERE message_id IN (?)
-       GROUP BY message_id, emoji`,
-      [messageIds]
-    );
-    const reactionsByMessage = new Map();
-    for (const reaction of reactionRows) {
-      const messageId = Number(reaction.message_id);
-      if (!reactionsByMessage.has(messageId)) reactionsByMessage.set(messageId, []);
-      reactionsByMessage.get(messageId).push({ emoji: reaction.emoji, count: Number(reaction.count) });
+  const messagesById = new Map();
+  for (const resultRow of resultRows) {
+    const { reaction_emoji: reactionEmoji, ...message } = resultRow;
+    const messageId = Number(message.id);
+    if (!messagesById.has(messageId)) messagesById.set(messageId, { ...message, reactions: [] });
+    if (reactionEmoji) {
+      const reactions = messagesById.get(messageId).reactions;
+      const existing = reactions.find((reaction) => reaction.emoji === reactionEmoji);
+      if (existing) existing.count += 1;
+      else reactions.push({ emoji: reactionEmoji, count: 1 });
     }
-    for (const row of rows) row.reactions = reactionsByMessage.get(Number(row.id)) || [];
   }
-  res.json(rows);
+  res.json([...messagesById.values()]);
 });
 
 router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.single("attachment"), async (req, res) => {
