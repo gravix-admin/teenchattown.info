@@ -382,6 +382,11 @@ function levelInfo(xp = 0) {
 }
 
 function setView(view) {
+  if (view !== "games") {
+    clearInterval(state.xoExpiryTimer);
+    state.xoExpiryTimer = null;
+    state.activeXoGameId = null;
+  }
   $$(".view").forEach((node) => node.classList.remove("active"));
   $(`#${view}View`)?.classList.add("active");
   $$(".side-nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
@@ -1355,12 +1360,13 @@ function renderVip() {
   }));
 }
 
+function xoSecondsLeft(game) {
+  const expiry = game.expires_at || game.expiresAt;
+  return expiry ? Math.max(0, Math.ceil((new Date(expiry).getTime() - Date.now()) / 1000)) : 60;
+}
+
 function xoStatusText(game) {
-  if (game.status === "waiting") {
-    const expiry = game.expires_at || game.expiresAt;
-    const seconds = expiry ? Math.max(0, Math.ceil((new Date(expiry).getTime() - Date.now()) / 1000)) : 60;
-    return `Waiting · ${seconds}s left`;
-  }
+  if (game.status === "waiting") return `Waiting · ${xoSecondsLeft(game)}s left`;
   if (game.status === "expired") return "Invitation expired";
   if (game.status === "cancelled") return "Waiting match cancelled";
   if (game.status === "draw") return "Draw · no gold won or lost";
@@ -1368,24 +1374,68 @@ function xoStatusText(game) {
   return Number(game.turn_user_id) === Number(state.me?.id) ? "Your turn" : "Opponent\'s turn";
 }
 
+function xoFinishCard(game, isHost, isGuest) {
+  if (game.status === "draw") {
+    return '<section class="xo-finish-card draw"><small>Match complete</small><h2>Draw</h2><p>The match is closed. No gold was won or lost.</p><button class="primary" data-back-games type="button">Return to game list</button></section>';
+  }
+  if (game.status !== "won") return "";
+  const participant = isHost || isGuest;
+  const won = Number(game.winner_id) === Number(state.me?.id);
+  const outcomeClass = !participant || won ? "won" : "lost";
+  const title = participant ? (won ? "You won!" : "You lost") : `${html(game.winner_name || "The winner")} won`;
+  const detail = participant
+    ? (won ? "The match is closed. You gained 500 gold." : "The match is closed and your 500 gold stake was lost.")
+    : "The match is closed and the result is final.";
+  return `<section class="xo-finish-card ${outcomeClass}"><small>Match complete</small><h2>${title}</h2><p>${detail}</p><button class="primary" data-back-games type="button">Return to game list</button></section>`;
+}
+
 function paintXoGame(game) {
   const root = $("#gamesHub");
   if (!root || !game) return;
-  clearTimeout(state.xoExpiryTimer);
+  clearInterval(state.xoExpiryTimer);
   state.activeXoGameId = Number(game.id);
   const board = String(game.board || "---------").padEnd(9, "-").slice(0, 9).split("");
   const isHost = Number(game.host_id) === Number(state.me?.id);
   const isGuest = Number(game.guest_id) === Number(state.me?.id);
   const myTurn = game.status === "playing" && Number(game.turn_user_id) === Number(state.me?.id);
-  root.innerHTML = '<section class="xo-arena"><div class="xo-arena-head"><button data-back-games type="button">← Games</button><span><small>500 gold match</small><h3>' + html(game.host_name || "Player X") + ' <b>vs</b> ' + html(game.guest_name || "Waiting...") + '</h3></span><img src="/assets/game-xo.svg" alt="" /></div><div class="xo-score-strip"><span><b>X</b>' + html(game.host_name || "Player X") + '</span><strong>' + html(xoStatusText(game)) + '</strong><span><b>O</b>' + html(game.guest_name || "Open seat") + '</span></div><div class="xo-board">' + board.map((cell, index) => '<button data-xo-cell="' + index + '" class="xo-cell ' + (cell !== "-" ? "played" : "") + '" type="button" ' + (!myTurn || cell !== "-" ? "disabled" : "") + '>' + (cell === "-" ? "" : cell) + '</button>').join("") + '</div><div class="xo-arena-actions">' + (game.status === "waiting" && !isHost ? '<button class="primary" data-join-current-xo type="button">Join for 500 gold</button>' : "") + (game.status === "waiting" && isHost ? '<p>Waiting for another player. The invite expires after one minute and no gold is charged until someone joins.</p><button class="xo-cancel-button" data-cancel-waiting-xo type="button">Cancel waiting game</button>' : "") + (["expired", "cancelled"].includes(game.status) ? '<p>This invitation is closed. Start a new match from Games.</p>' : "") + (!isHost && !isGuest && game.status !== "waiting" ? '<p>This match belongs to its two players.</p>' : "") + '</div></section>';
+  const waitingActions = game.status === "waiting" && isHost
+    ? '<div class="xo-waiting-note"><strong>Invitation is live</strong><span>Another player has one minute to join. No gold is charged until they do.</span></div><button class="xo-cancel-button" data-cancel-waiting-xo type="button"><b>×</b><span>Cancel invitation permanently<small>Closes this match for everyone</small></span></button>'
+    : "";
+  root.innerHTML = `
+    <section class="xo-arena ${["won", "draw"].includes(game.status) ? "match-finished" : ""}">
+      <div class="xo-arena-head">
+        <button class="xo-back-button" data-back-games type="button" title="Leave this screen without cancelling the match"><b>‹</b><span>Game list<small>Match stays open</small></span></button>
+        <span><small>500 gold match</small><h3>${html(game.host_name || "Player X")} <b>vs</b> ${html(game.guest_name || "Waiting...")}</h3></span>
+        <img src="/assets/game-xo.svg" alt="" />
+      </div>
+      <div class="xo-score-strip"><span><b>X</b>${html(game.host_name || "Player X")}</span><strong data-xo-status>${html(xoStatusText(game))}</strong><span><b>O</b>${html(game.guest_name || "Open seat")}</span></div>
+      <div class="xo-board">${board.map((cell, index) => `<button data-xo-cell="${index}" class="xo-cell ${cell !== "-" ? "played" : ""}" type="button" ${!myTurn || cell !== "-" ? "disabled" : ""}>${cell === "-" ? "" : cell}</button>`).join("")}</div>
+      ${xoFinishCard(game, isHost, isGuest)}
+      <div class="xo-arena-actions">
+        ${game.status === "waiting" && !isHost ? '<button class="primary" data-join-current-xo type="button">Join for 500 gold</button>' : ""}
+        ${waitingActions}
+        ${["expired", "cancelled"].includes(game.status) ? '<div class="xo-closed-note"><strong>This invitation is closed</strong><span>Return to the game list to start another match.</span></div>' : ""}
+        ${!isHost && !isGuest && game.status !== "waiting" && !["won", "draw"].includes(game.status) ? '<p>This match belongs to its two players.</p>' : ""}
+      </div>
+    </section>`;
   if (game.status === "playing" && (isHost || isGuest)) {
-    $(".xo-arena-actions", root)?.insertAdjacentHTML("beforeend", '<button class="xo-forfeit-button" data-forfeit-xo type="button">Cancel game · counts as loss</button>');
+    $(".xo-arena-actions", root)?.insertAdjacentHTML("beforeend", '<button class="xo-forfeit-button" data-forfeit-xo type="button"><b>!</b><span>Forfeit match<small>This deliberately ends the game as your loss</small></span></button>');
   }
   if (game.status === "waiting") {
-    const expiry = new Date(game.expires_at || game.expiresAt || Date.now() + 60000).getTime();
-    state.xoExpiryTimer = setTimeout(() => openXoGame(game.id).catch(() => renderGames().catch(() => {})), Math.max(500, expiry - Date.now() + 400));
+    let refreshingExpiredGame = false;
+    const updateCountdown = () => {
+      const seconds = xoSecondsLeft(game);
+      const status = $("[data-xo-status]", root);
+      if (status) status.textContent = seconds > 0 ? `Waiting · ${seconds}s left` : "Invitation expired";
+      if (seconds > 0 || refreshingExpiredGame) return;
+      refreshingExpiredGame = true;
+      clearInterval(state.xoExpiryTimer);
+      openXoGame(game.id).catch(() => renderGames().catch(() => {}));
+    };
+    updateCountdown();
+    state.xoExpiryTimer = setInterval(updateCountdown, 1000);
   }
-  $("[data-back-games]", root)?.addEventListener("click", () => renderGames().catch((error) => toast(error.message)));
+  $$("[data-back-games]", root).forEach((button) => button.addEventListener("click", () => renderGames().catch((error) => toast(error.message))));
   $("[data-join-current-xo]", root)?.addEventListener("click", async () => {
     try {
       const joined = await api("/api/games/xo/" + game.id + "/join", { method: "POST" });
@@ -1393,14 +1443,14 @@ function paintXoGame(game) {
     } catch (error) { toast(error.message); }
   });
   $("[data-cancel-waiting-xo]", root)?.addEventListener("click", async () => {
-    if (!confirm("Cancel this waiting X-O match? No gold will be charged.")) return;
+    if (!confirm("Permanently cancel this invitation? This is not just closing the screen. The match will be closed for everyone.")) return;
     try {
       const updated = await api("/api/games/xo/" + game.id + "/cancel", { method: "POST" });
       paintXoGame(updated);
     } catch (error) { toast(error.message); }
   });
   $("[data-forfeit-xo]", root)?.addEventListener("click", async () => {
-    if (!confirm("Cancel this started X-O match? It will count as your loss and your opponent will win.")) return;
+    if (!confirm("Forfeit this match now? This deliberately ends the game as your loss. Your opponent will win and receive the gold.")) return;
     try {
       const updated = await api("/api/games/xo/" + game.id + "/forfeit", { method: "POST" });
       paintXoGame(updated);
@@ -1433,12 +1483,17 @@ async function openXoGame(gameId) {
 async function renderGames() {
   const root = $("#gamesHub");
   if (!root) return;
-  clearTimeout(state.xoExpiryTimer);
+  clearInterval(state.xoExpiryTimer);
   state.activeXoGameId = null;
   root.innerHTML = '<div class="view-loading"><span></span><strong>Opening games...</strong></div>';
   const data = await api("/api/games/xo?roomId=" + Number(state.currentRoomId || 0));
   const games = data.games || [];
-  root.innerHTML = '<section class="game-feature-card"><div class="game-feature-art"><img src="/assets/game-xo.svg" alt="" /></div><div><span class="eyebrow">Quick match</span><h3>X-O</h3><p>Start a match and TownBot posts a join button in the room. The waiting invite expires after one minute. Each player stakes 500 gold only after both join.</p><button class="primary" id="startXoGame" type="button">Start X-O match</button></div></section><section class="game-open-list"><div class="pm-section-title"><span>Open & active matches</span><small>' + (games.length || "none") + '</small></div>' + games.map((game) => '<button class="game-match-row" data-game-id="' + game.id + '" type="button"><img src="/assets/game-xo.svg" alt="" /><span><strong>' + html(game.host_name || "Player X") + (game.guest_name ? " vs " + html(game.guest_name) : " is waiting") + '</strong><small>' + html(xoStatusText(game)) + '</small></span><em>' + (game.status === "waiting" ? (Number(game.host_id) === Number(state.me.id) ? "Waiting" : "Join") : "Open") + '</em></button>').join("") + (games.length ? "" : '<div class="pm-empty"><strong>No X-O matches yet</strong><span>Start one and invite the room.</span></div>') + '</section>';
+  root.innerHTML = `
+    <section class="game-feature-card"><div class="game-feature-art"><img src="/assets/game-xo.svg" alt="" /></div><div><span class="eyebrow">Quick match</span><h3>X-O</h3><p>Start a match and TownBot posts a join button in the room. The waiting invite expires after one minute. Each player stakes 500 gold only after both join.</p><button class="primary" id="startXoGame" type="button">Start X-O match</button></div></section>
+    <section class="game-open-list"><div class="pm-section-title"><span>Open & active matches</span><small>${games.length || "none"}</small></div>
+      ${games.map((game) => `<button class="game-match-row" data-game-id="${game.id}" type="button"><img src="/assets/game-xo.svg" alt="" /><span><strong>${html(game.host_name || "Player X")}${game.guest_name ? ` vs ${html(game.guest_name)}` : " is waiting"}</strong><small data-xo-list-status="${game.id}">${html(xoStatusText(game))}</small></span><em>${game.status === "waiting" ? (Number(game.host_id) === Number(state.me.id) ? "Waiting" : "Join") : "Open"}</em></button>`).join("")}
+      ${games.length ? "" : '<div class="pm-empty"><strong>No X-O matches yet</strong><span>Start one and invite the room.</span></div>'}
+    </section>`;
   $("#startXoGame")?.addEventListener("click", async (event) => {
     event.currentTarget.disabled = true;
     try {
@@ -1451,6 +1506,23 @@ async function renderGames() {
     }
   });
   $$("[data-game-id]", root).forEach((button) => button.addEventListener("click", () => openXoGame(button.dataset.gameId).catch((error) => toast(error.message))));
+  const waitingGames = games.filter((game) => game.status === "waiting");
+  if (waitingGames.length) {
+    let refreshingList = false;
+    const updateListCountdowns = () => {
+      waitingGames.forEach((game) => {
+        const label = $(`[data-xo-list-status="${game.id}"]`, root);
+        if (label) label.textContent = `Waiting · ${xoSecondsLeft(game)}s left`;
+      });
+      if (!refreshingList && waitingGames.some((game) => xoSecondsLeft(game) <= 0)) {
+        refreshingList = true;
+        clearInterval(state.xoExpiryTimer);
+        renderGames().catch((error) => toast(error.message));
+      }
+    };
+    updateListCountdowns();
+    state.xoExpiryTimer = setInterval(updateListCountdowns, 1000);
+  }
 }
 
 async function renderChatStore({ force = false } = {}) {
@@ -3158,8 +3230,9 @@ function openPm(userId, fallbackUser = null) {
         <input id="pmAttachment" class="hidden" type="file" accept="image/*" />
         <div id="pmUploadPreview" class="upload-preview hidden"></div>
         <div id="pmReplyBox" class="pm-reply-composer hidden">
-          <span><small>Replying to</small><strong id="pmReplyName"></strong><em id="pmReplyText"></em></span>
-          <button id="pmClearReply" type="button" title="Cancel reply">x</button>
+          <i class="pm-reply-symbol" aria-hidden="true">↩</i>
+          <span><small>Replying to <strong id="pmReplyName"></strong></small><em id="pmReplyText"></em></span>
+          <button id="pmClearReply" type="button" title="Cancel reply" aria-label="Cancel reply">×</button>
         </div>
         <form id="pmForm" class="composer-input pm-composer">
           <button class="composer-icon" id="pmEmojiButton" type="button" title="Emoji"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM8 9.5a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm8 0a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Zm-4 7.2c-2.2 0-4-1.2-5-3h10c-1 1.8-2.8 3-5 3Z"/></svg></button>
@@ -3271,10 +3344,10 @@ function pmMessageHtml(row) {
   return `
     <div class="pm-message ${own ? "own" : ""}" data-pm-message-id="${html(row.id || "")}">
       <span><strong>${html(sender)}</strong><small>${formatTime(createdAt)}${row.read_at ? " | seen" : ""}</small></span>
-      ${replyToId ? `<button class="pm-quoted-message" data-pm-jump="${Number(replyToId)}" type="button"><small>Reply to ${html(replySender)}</small><b>${html(replyText.slice(0, 140))}</b></button>` : ""}
+      ${replyToId ? `<button class="pm-quoted-message" data-pm-jump="${Number(replyToId)}" type="button"><i aria-hidden="true">↩</i><span><small>${html(replySender)}</small><b>${html(replyText.slice(0, 140))}</b></span></button>` : ""}
       ${row.body ? `<p>${renderMessageBody(String(row.body), {})}</p>` : ""}
       ${messageAttachmentHtml(row, "pm-attachment")}
-      <button class="pm-reply-button" data-pm-reply="${html(row.id || "")}" type="button">Reply</button>
+      <button class="pm-reply-button" data-pm-reply="${html(row.id || "")}" type="button">↩ Reply</button>
     </div>
   `;
 }

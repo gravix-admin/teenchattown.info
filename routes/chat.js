@@ -375,7 +375,8 @@ router.get("/private-messages/:userId", requireAuth, async (req, res) => {
        JOIN users ru ON ru.id = pm.receiver_id
        LEFT JOIN private_messages reply ON reply.id = pm.reply_to_id AND reply.deleted_at IS NULL
        LEFT JOIN users reply_sender ON reply_sender.id = reply.sender_id
-       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) AND deleted_at IS NULL
+       WHERE ((pm.sender_id = ? AND pm.receiver_id = ?) OR (pm.sender_id = ? AND pm.receiver_id = ?))
+         AND pm.deleted_at IS NULL
        ORDER BY pm.created_at DESC
        LIMIT ?
      ) recent
