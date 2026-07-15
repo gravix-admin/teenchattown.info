@@ -17,6 +17,8 @@ const chatRoutes = require("./routes/chat");
 const socialRoutes = require("./routes/social");
 const adminRoutes = require("./routes/admin");
 const gameRoutes = require("./routes/games");
+const susGameRoutes = require("./routes/sus");
+const susGameService = require("./services/susGameService");
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +39,7 @@ const io = SocketServer
       pingInterval: 25000,
       pingTimeout: 20000,
       maxHttpBufferSize: 1e6,
+      perMessageDeflate: { threshold: 1024 },
     })
   : null;
 
@@ -82,6 +85,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/games/sus", susGameRoutes);
 app.use("/api/games", gameRoutes);
 
 if (!io) {
@@ -115,6 +119,7 @@ async function keepSchemaReady() {
       console.log("Database schema ready.");
       startIntruderLoop();
       startDataRetention();
+      await susGameService.initialize();
       return;
     } catch (error) {
       console.error("Database schema check failed; retrying shortly.");
@@ -157,6 +162,7 @@ if (io) {
   io.on("connection", async (socket) => {
     socket.join(`user:${socket.user.id}`);
     socket.emit("ready", true);
+    susGameService.reconnect(socket.user.id);
     await database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch((error) => {
       console.error("Could not update last_seen for socket connect:", error.message);
     });
@@ -166,6 +172,7 @@ if (io) {
     });
     socket.on("disconnect", async () => {
       if (io.sockets.adapter.rooms.get(`user:${socket.user.id}`)?.size) return;
+      susGameService.handleDisconnect(socket.user.id);
       await database.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [socket.user.id]).catch((error) => {
         console.error("Could not update last_seen for socket disconnect:", error.message);
       });

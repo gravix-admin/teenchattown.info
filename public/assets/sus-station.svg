@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Blackout Station</title><desc id="desc">A dark orbital station corridor overlooking a blue planet.</desc>
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#070b16"/><stop offset="1" stop-color="#101526"/></linearGradient>
+    <radialGradient id="planet"><stop stop-color="#8ee7ff"/><stop offset=".42" stop-color="#246b91"/><stop offset="1" stop-color="#0a1930"/></radialGradient>
+    <linearGradient id="floor"><stop stop-color="#293148"/><stop offset="1" stop-color="#0a0e19"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M80 0H0V80" fill="none" stroke="#7dd3fc" stroke-opacity=".08"/></pattern>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="1250" cy="250" r="230" fill="url(#planet)" opacity=".78"/>
+  <circle cx="1250" cy="250" r="245" fill="none" stroke="#9fe9ff" stroke-opacity=".24" filter="url(#glow)"/>
+  <path d="M0 0h1600v80H0zM0 650h1600v250H0z" fill="#050810"/>
+  <path d="M0 650 520 470h560l520 180v250H0z" fill="url(#floor)"/>
+  <path d="M0 650 520 470M1600 650 1080 470M800 470v430M360 900l300-430M1240 900 940 470" fill="none" stroke="#8ddcf5" stroke-opacity=".16" stroke-width="3"/>
+  <path d="M0 650h1600v250H0z" fill="url(#grid)" opacity=".5"/>
+  <g fill="#171e31" stroke="#47536f" stroke-width="5">
+    <path d="M80 120h300l110 110v300L380 640H80z"/><path d="M1520 120h-300l-110 110v300l110 110h300z"/>
+  </g>
+  <g fill="#0c1220" stroke="#56d4ed" stroke-opacity=".55" stroke-width="4">
+    <rect x="140" y="190" width="260" height="250" rx="14"/><rect x="1200" y="190" width="260" height="250" rx="14"/>
+  </g>
+  <g fill="#7dd3fc" opacity=".75" filter="url(#glow)"><rect x="185" y="230" width="170" height="8" rx="4"/><rect x="1245" y="230" width="170" height="8" rx="4"/><circle cx="310" cy="515" r="8"/><circle cx="1290" cy="515" r="8"/></g>
+  <g fill="#c4b5fd" opacity=".28"><path d="M540 115h520l70 65H470z"/><path d="M590 180h420v28H590z"/></g>
+  <path d="M610 90h380" stroke="#67e8f9" stroke-width="7" stroke-linecap="round" opacity=".68" filter="url(#glow)"/>
+  <g fill="#eefcff" opacity=".8"><circle cx="710" cy="305" r="3"/><circle cx="920" cy="260" r="2"/><circle cx="1080" cy="380" r="3"/><circle cx="560" cy="340" r="2"/></g>
+  <text x="800" y="410" fill="#dbeafe" font-family="system-ui,sans-serif" font-weight="800" font-size="32" text-anchor="middle" letter-spacing="12" opacity=".75">BLACKOUT STATION</text>
+</svg>

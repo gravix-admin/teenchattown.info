@@ -520,6 +520,55 @@ async function initSchema() {
     )
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS sus_matches (
+      id VARCHAR(36) PRIMARY KEY,
+      lobby_code VARCHAR(8) NOT NULL UNIQUE,
+      host_user_id INT NOT NULL,
+      visibility VARCHAR(16) NOT NULL DEFAULT 'public',
+      status VARCHAR(24) NOT NULL DEFAULT 'lobby',
+      winner_faction VARCHAR(24) NULL,
+      settings_json TEXT NULL,
+      state_json MEDIUMTEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME NULL,
+      ended_at DATETIME NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY sus_match_status (status, updated_at),
+      KEY sus_match_host (host_user_id, status)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS sus_match_players (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      match_id VARCHAR(36) NOT NULL,
+      user_id INT NOT NULL,
+      faction VARCHAR(24) NULL,
+      role_name VARCHAR(32) NULL,
+      outcome VARCHAR(24) NULL,
+      reward_eligible TINYINT DEFAULT 1,
+      joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      left_at DATETIME NULL,
+      UNIQUE KEY sus_match_user (match_id, user_id),
+      KEY sus_player_user (user_id, joined_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS sus_rewards (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      match_id VARCHAR(36) NOT NULL,
+      user_id INT NOT NULL,
+      gold INT NOT NULL DEFAULT 0,
+      xp INT NOT NULL DEFAULT 0,
+      reason VARCHAR(120) DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY sus_reward_once (match_id, user_id),
+      KEY sus_reward_daily (user_id, created_at)
+    )
+  `);
+
   await migrateExistingTables();
   await ensureUserIdentitiesAreUnique();
 

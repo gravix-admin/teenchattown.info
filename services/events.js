@@ -51,4 +51,10 @@ function notifyUser(userId, event, payload) {
   broadcast(event, payload, (meta) => Number(meta.userId) === Number(userId));
 }
 
-module.exports = { addClient, removeClient, broadcast, notifyUser, setSocketServer };
+function notifySocketUser(userId, event, payload) {
+  if (!ioServer) return false;
+  ioServer.to(`user:${Number(userId)}`).emit(event, payload);
+  return true;
+}
+
+module.exports = { addClient, removeClient, broadcast, notifyUser, notifySocketUser, setSocketServer };

@@ -449,6 +449,7 @@ function setView(view) {
     clearInterval(state.xoExpiryTimer);
     state.xoExpiryTimer = null;
     state.activeXoGameId = null;
+    window.SusGame?.leaveView?.();
   }
   $$(".view").forEach((node) => node.classList.remove("active"));
   $(`#${view}View`)?.classList.add("active");
@@ -460,7 +461,7 @@ function setView(view) {
     renderNews().catch((error) => toast(error.message));
   }
   if (view === "leaderboard") renderLeaderboard().catch((error) => toast(error.message));
-  if (view === "games" && !state.activeXoGameId) renderGames().catch((error) => toast(error.message));
+  if (view === "games" && !state.activeXoGameId && !window.SusGame?.isOpen?.()) renderGames().catch((error) => toast(error.message));
   if (view === "chatStore") renderChatStore().catch((error) => toast(error.message));
 }
 
@@ -1441,8 +1442,8 @@ function renderUsers() {
       : state.users).filter(visibleInUserList);
   const rankSort = (a, b) => rankOrder.indexOf(b.rank) - rankOrder.indexOf(a.rank) || displayName(a).localeCompare(displayName(b));
   const seenSort = (a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0) || displayName(a).localeCompare(displayName(b));
-  const online = source.filter((user) => isOnline(user)).sort(state.userTab === "staff" ? rankSort : (a, b) => displayName(a).localeCompare(displayName(b)));
-  const offline = source.filter((user) => !isOnline(user)).sort(state.userTab === "staff" ? rankSort : seenSort);
+  const online = source.filter((user) => isOnline(user)).sort(rankSort);
+  const offline = source.filter((user) => !isOnline(user)).sort(seenSort);
   $("#userList").innerHTML = `
     <section class="right-user-section">
       <h3>${state.userTab === "staff" ? "Staff online" : "Online"}</h3>
@@ -1657,15 +1658,11 @@ async function renderGames() {
   if (!root) return;
   clearInterval(state.xoExpiryTimer);
   state.activeXoGameId = null;
-  root.innerHTML = '<div class="view-loading"><span></span><strong>Opening games...</strong></div>';
-  const data = await api("/api/games/xo?roomId=" + Number(state.currentRoomId || 0));
-  const games = data.games || [];
   root.innerHTML = `
+    ${window.SusGame?.cardHtml?.() || ""}
     <section class="game-feature-card"><div class="game-feature-art"><img src="/assets/game-xo.svg" alt="" /></div><div><span class="eyebrow">Quick match</span><h3>X-O</h3><p>Start a match and TownBot posts a join button in the room. The waiting invite expires after one minute. Each player stakes 500 gold only after both join.</p><button class="primary" id="startXoGame" type="button">Start X-O match</button></div></section>
-    <section class="game-open-list"><div class="pm-section-title"><span>Open & active matches</span><small>${games.length || "none"}</small></div>
-      ${games.map((game) => `<button class="game-match-row" data-game-id="${game.id}" type="button"><img src="/assets/game-xo.svg" alt="" /><span><strong>${html(game.host_name || "Player X")}${game.guest_name ? ` vs ${html(game.guest_name)}` : " is waiting"}</strong><small data-xo-list-status="${game.id}">${html(xoStatusText(game))}</small></span><em>${game.status === "waiting" ? (Number(game.host_id) === Number(state.me.id) ? "Waiting" : "Join") : "Open"}</em></button>`).join("")}
-      ${games.length ? "" : '<div class="pm-empty"><strong>No X-O matches yet</strong><span>Start one and invite the room.</span></div>'}
-    </section>`;
+    <section class="game-open-list" id="xoGameList"><div class="view-loading"><span></span><strong>Loading X-O matches...</strong></div></section>`;
+  window.SusGame?.bindCard?.(root);
   $("#startXoGame")?.addEventListener("click", async (event) => {
     event.currentTarget.disabled = true;
     try {
@@ -1677,6 +1674,20 @@ async function renderGames() {
       event.currentTarget.disabled = false;
     }
   });
+  let games = [];
+  try {
+    const data = await api("/api/games/xo?roomId=" + Number(state.currentRoomId || 0));
+    games = data.games || [];
+  } catch (error) {
+    const list = $("#xoGameList");
+    if (list) list.innerHTML = `<div class="pm-empty"><strong>X-O is reconnecting</strong><span>${html(error.message)}</span></div>`;
+    return;
+  }
+  const list = $("#xoGameList");
+  if (!list || !root.isConnected || window.SusGame?.isOpen?.()) return;
+  list.innerHTML = `<div class="pm-section-title"><span>Open & active X-O matches</span><small>${games.length || "none"}</small></div>
+    ${games.map((game) => `<button class="game-match-row" data-game-id="${game.id}" type="button"><img src="/assets/game-xo.svg" alt="" /><span><strong>${html(game.host_name || "Player X")}${game.guest_name ? ` vs ${html(game.guest_name)}` : " is waiting"}</strong><small data-xo-list-status="${game.id}">${html(xoStatusText(game))}</small></span><em>${game.status === "waiting" ? (Number(game.host_id) === Number(state.me.id) ? "Waiting" : "Join") : "Open"}</em></button>`).join("")}
+    ${games.length ? "" : '<div class="pm-empty"><strong>No X-O matches yet</strong><span>Start one and invite the room.</span></div>'}`;
   $$("[data-game-id]", root).forEach((button) => button.addEventListener("click", () => openXoGame(button.dataset.gameId).catch((error) => toast(error.message))));
   const waitingGames = games.filter((game) => game.status === "waiting");
   if (waitingGames.length) {
@@ -3861,12 +3872,26 @@ const realtimeHandlers = {
   },
   "xo-game"(data = {}) {
     if (!$("#gamesView").classList.contains("active")) return;
+    if (window.SusGame?.isOpen?.()) return;
     if (state.activeXoGameId && Number(state.activeXoGameId) === Number(data.gameId)) {
       if (data.game) updateXoGameSmooth(data.game);
       else openXoGame(data.gameId).catch(() => {});
     } else {
       renderGames().catch(() => {});
     }
+  },
+  "sus-state"(data = {}) {
+    window.SusGame?.handleRealtime?.("state", data);
+  },
+  "sus-chat"(data = {}) {
+    window.SusGame?.handleRealtime?.("chat", data);
+  },
+  "sus-event"(data = {}) {
+    window.SusGame?.handleRealtime?.("event", data);
+  },
+  "sus-reward"(data = {}) {
+    window.SusGame?.handleRealtime?.("reward", data);
+    refreshUsersLight().catch(() => {});
   },
   "message-updated"(data = {}) {
     const message = state.messages.find((item) => Number(item.id) === Number(data.id));
@@ -4503,6 +4528,15 @@ function bindEvents() {
     if (event.target.closest("[data-close-lightbox]") || event.target.id === "imageLightbox") closeImageZoom();
   });
 }
+
+window.TCTGameBridge = {
+  api,
+  html,
+  toast,
+  renderGames,
+  getState: () => state,
+  socketConnected: () => Boolean(state.socket?.connected),
+};
 
 applyTheme(localStorage.getItem("tct_theme") || "dark");
 setupDobSelects();
