@@ -103,7 +103,7 @@ router.post("/register", async (req, res) => {
     [result] = await pool.query(
       `INSERT INTO users (username, email, password_hash, dob, age, gender, ip_address, country, avatar_url, banner_url, chat_background)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [username, email, passwordHash, dob, age, gender, ip, country, `/assets/avatar-${gender}.svg`, "/assets/profile-banner.svg", "moonlake"]
+      [username, email, passwordHash, dob, age, gender, ip, country, `/assets/avatar-${gender}.svg`, "/assets/profile-banner.svg", "arc-grid"]
     );
   } catch (error) {
     if (isDuplicateKeyError(error)) return res.status(409).json({ error: duplicateKeyMessage(error) });
@@ -213,11 +213,11 @@ router.patch("/me", requireAuth, async (req, res) => {
   const allowed = ["displayName", "bio", "aboutMe", "mood", "theme", "chatBackground", "bubbleStyle", "usernameColor", "textColor", "animatedBannerUrl", "profileTitle", "profileStatus", "profileAccent", "showOnlineStatus", "showCountry", "showAge", "showGender"];
   const data = {};
   const limits = { displayName: 40, bio: 120, chatBackground: 40, profileTitle: 80, profileStatus: 40, profileAccent: 24, aboutMe: 1500 };
-  const allowedChatBackgrounds = new Set(["moonlake", "autumn", "neon-city", "sunrise"]);
+  const allowedChatBackgrounds = new Set(["arc-grid", "moonlake", "autumn", "neon-city", "sunrise"]);
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
       if (key === "chatBackground") {
-        const chatBackground = String(req.body[key] || "moonlake");
+        const chatBackground = String(req.body[key] || "arc-grid");
         if (!allowedChatBackgrounds.has(chatBackground)) {
           return res.status(400).json({ error: "Choose a valid room background." });
         }

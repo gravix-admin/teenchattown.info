@@ -136,8 +136,9 @@ const giftCatalog = [
   ["diamond", "Diamond", 500],
 ];
 const emojiChoices = ["😀", "😂", "😊", "😍", "🥰", "😎", "😭", "😡", "👍", "👎", "👏", "🙏", "💀", "🔥", "✨", "❤️", "💙", "💎", "👑", "🎉", "🌙", "⭐", "😴", "🤝"];
-const defaultRoomBackground = "moonlake";
+const defaultRoomBackground = "arc-grid";
 const roomBackgroundChoices = [
+  ["arc-grid", "Arc Grid", "/assets/room-bg-arc-grid.svg"],
   ["moonlake", "Moon Lake", "/assets/room-bg-moonlake.webp"],
   ["autumn", "Autumn Trail", "/assets/room-bg-autumn.webp"],
   ["neon-city", "Neon Rain", "/assets/room-bg-neon-city.webp"],
@@ -246,7 +247,7 @@ function rankBadge(rank, labelOverride = "") {
   const badge = state.rankBadges[rank] || { label: rank, color: "#8b5cf6" };
   const image = badge.imageUrl ? `<img src="${html(badge.imageUrl)}" alt="" />` : "";
   const label = String(labelOverride || badge.label || rank || "user").slice(0, 18);
-  return `<span class="rank-pill rank-${html(String(rank || "user").replaceAll(" ", "-"))}" style="--rank-color:${html(badge.color)}">${image}${html(label)}</span>`;
+  return `<span class="rank-pill user-rank-pill rank-${html(String(rank || "user").replaceAll(" ", "-"))}" style="--rank-color:${html(badge.color)}">${image}${html(label)}</span>`;
 }
 
 function userRankBadge(user) {
@@ -530,6 +531,9 @@ function applyRoomBackground(value = state.me?.chatBackground) {
   const backgroundId = normalizeRoomBackground(value || localStorage.getItem("tct_chat_background"));
   const selected = assetUrl(roomBackgroundUrls[backgroundId] || roomBackgroundUrls[defaultRoomBackground] || currentRoomImage());
   const image = cssUrl(selected);
+  const shade = backgroundId === "arc-grid"
+    ? "linear-gradient(180deg, rgba(24, 26, 33, .03), rgba(24, 26, 33, .14))"
+    : "linear-gradient(180deg, rgba(6, 10, 18, .38), rgba(6, 10, 18, .56))";
   localStorage.setItem("tct_chat_background", backgroundId);
   document.documentElement.style.setProperty("--room-image", image);
   document.body.style.setProperty("--room-image", image);
@@ -537,8 +541,8 @@ function applyRoomBackground(value = state.me?.chatBackground) {
   if (messages) {
     messages.dataset.roomBackground = backgroundId;
     messages.style.setProperty("--room-image", image);
-    messages.style.backgroundColor = "#07111f";
-    messages.style.backgroundImage = `linear-gradient(180deg, rgba(6, 10, 18, .38), rgba(6, 10, 18, .56)), ${image}`;
+    messages.style.backgroundColor = "#181a21";
+    messages.style.backgroundImage = `${shade}, ${image}`;
     messages.style.backgroundPosition = "center center, center center";
     messages.style.backgroundRepeat = "no-repeat, no-repeat";
     messages.style.backgroundSize = "cover, cover";

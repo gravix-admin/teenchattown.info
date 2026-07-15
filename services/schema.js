@@ -154,7 +154,7 @@ async function initSchema() {
       about_me TEXT NULL,
       mood VARCHAR(80) DEFAULT '',
       theme VARCHAR(32) DEFAULT 'dark',
-      chat_background VARCHAR(40) DEFAULT 'moonlake',
+      chat_background VARCHAR(40) DEFAULT 'arc-grid',
       bubble_style VARCHAR(32) DEFAULT 'default',
       username_color VARCHAR(24) DEFAULT '',
       text_color VARCHAR(24) DEFAULT '',
@@ -681,7 +681,7 @@ async function migrateExistingTables() {
       about_me: "TEXT NULL",
       mood: "VARCHAR(80) DEFAULT ''",
       theme: "VARCHAR(32) DEFAULT 'dark'",
-      chat_background: "VARCHAR(40) DEFAULT 'moonlake'",
+      chat_background: "VARCHAR(40) DEFAULT 'arc-grid'",
       bubble_style: "VARCHAR(32) DEFAULT 'default'",
       username_color: "VARCHAR(24) DEFAULT ''",
       text_color: "VARCHAR(24) DEFAULT ''",
@@ -904,7 +904,7 @@ async function migrateExistingTables() {
       await ensureColumn(table, column, definition);
     }
   }
-  await query("ALTER TABLE users MODIFY COLUMN chat_background VARCHAR(40) DEFAULT 'moonlake'");
+  await query("ALTER TABLE users MODIFY COLUMN chat_background VARCHAR(40) DEFAULT 'arc-grid'");
 
   const mediumTextColumns = {
     users: ["avatar_url", "banner_url", "animated_banner_url"],
@@ -1012,7 +1012,13 @@ async function migrateLegacyUserData() {
 }
 
 async function seedDefaults() {
-  await pool.query("UPDATE users SET chat_background = 'moonlake' WHERE chat_background IS NULL OR chat_background = ''");
+  const [[backgroundMigration]] = await pool.query("SELECT setting_value FROM site_settings WHERE setting_key = 'default_room_background_version'");
+  if (backgroundMigration?.setting_value !== "arc-grid-v1") {
+    await pool.query("UPDATE users SET chat_background = 'arc-grid' WHERE chat_background IS NULL OR chat_background = '' OR chat_background = 'moonlake'");
+    await pool.query(
+      "INSERT INTO site_settings (setting_key, setting_value) VALUES ('default_room_background_version', 'arc-grid-v1') ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)"
+    );
+  }
 
   const [rooms] = await pool.query("SELECT COUNT(*) AS count FROM rooms");
   if (!rooms[0].count) {
@@ -1123,7 +1129,7 @@ async function seedDefaults() {
       `INSERT INTO users
        (username, email, password_hash, dob, age, gender, rank_name, display_name, avatar_url, bio, about_me, xp, gold, diamonds, ip_address, country, frame, theme, chat_background)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ["Intruder", email, hash, "2007-01-01", 19, "other", "bot", "Intruder", "/assets/intruder-bot.png", "Intruder game bot.", "Drops surprise point hunts in chat rooms.", 0, 0, 0, "system", "Teen Chat Town", "clean", "dark", "moonlake"]
+      ["Intruder", email, hash, "2007-01-01", 19, "other", "bot", "Intruder", "/assets/intruder-bot.png", "Intruder game bot.", "Drops surprise point hunts in chat rooms.", 0, 0, 0, "system", "Teen Chat Town", "clean", "dark", "arc-grid"]
     );
     intruderBotId = result.insertId;
   } else {
