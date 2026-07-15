@@ -1995,6 +1995,12 @@ html.returning-user #authScreen { display: none; }
 .room-card small { color: #d8d3ea; line-height: 1.45; }
 .room-card:hover img, .room-card.active img { transform: scale(1.05); }
 .room-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent); }
+.random-talk-room-card { border-color:rgba(103,232,249,.22); background:#08111d; }
+.random-talk-room-card::after { background:radial-gradient(circle at 50% 25%,rgba(34,211,238,.12),transparent 32%),linear-gradient(180deg,rgba(5,8,16,.05),rgba(5,8,16,.94)); }
+.random-talk-room-art { position:absolute; inset:0; display:flex; justify-content:center; gap:22px; align-items:flex-start; padding-top:42px; }
+.random-talk-room-art i { width:60px; height:60px; border:1px solid rgba(103,232,249,.25); border-radius:50%; background:#132b3a; box-shadow:0 0 35px rgba(34,211,238,.12); }
+.random-talk-room-art i:nth-child(2) { border-color:rgba(196,181,253,.24); background:#211d38; }
+.random-talk-room-art b { position:absolute; top:62px; color:#a5f3fc; font-size:1rem; }
 .news-comments {
   display: grid;
   gap: 10px;

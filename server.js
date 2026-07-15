@@ -19,6 +19,8 @@ const adminRoutes = require("./routes/admin");
 const gameRoutes = require("./routes/games");
 const susGameRoutes = require("./routes/sus");
 const susGameService = require("./services/susGameService");
+const randomTalkRoutes = require("./routes/randomTalk");
+const randomTalkService = require("./services/randomTalkService");
 
 const app = express();
 const server = http.createServer(app);
@@ -85,6 +87,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/random-talk", randomTalkRoutes);
 app.use("/api/games/sus", susGameRoutes);
 app.use("/api/games", gameRoutes);
 
@@ -120,6 +123,7 @@ async function keepSchemaReady() {
       startIntruderLoop();
       startDataRetention();
       await susGameService.initialize();
+      await randomTalkService.initialize();
       return;
     } catch (error) {
       console.error("Database schema check failed; retrying shortly.");
@@ -163,6 +167,7 @@ if (io) {
     socket.join(`user:${socket.user.id}`);
     socket.emit("ready", true);
     susGameService.reconnect(socket.user.id);
+    randomTalkService.reconnect(socket.user.id);
     await database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch((error) => {
       console.error("Could not update last_seen for socket connect:", error.message);
     });
@@ -170,9 +175,11 @@ if (io) {
     socket.on("presence", () => {
       database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch(() => {});
     });
+    socket.on("random-talk-typing", (data = {}) => randomTalkService.typing(socket.user.id, data.typing));
     socket.on("disconnect", async () => {
       if (io.sockets.adapter.rooms.get(`user:${socket.user.id}`)?.size) return;
       susGameService.handleDisconnect(socket.user.id);
+      randomTalkService.handleDisconnect(socket.user.id);
       await database.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [socket.user.id]).catch((error) => {
         console.error("Could not update last_seen for socket disconnect:", error.message);
       });

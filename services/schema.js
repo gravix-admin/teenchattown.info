@@ -180,6 +180,8 @@ async function initSchema() {
       muted_until DATETIME NULL,
       kicked_until DATETIME NULL,
       banned_until DATETIME NULL,
+      random_talk_restricted_until DATETIME NULL,
+      random_talk_restriction_reason VARCHAR(255) DEFAULT '',
       delete_requested_at DATETIME NULL,
       last_seen DATETIME NULL,
       last_online_reward_at DATETIME NULL,
@@ -569,6 +571,61 @@ async function initSchema() {
     )
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS random_talk_sessions (
+      id VARCHAR(36) PRIMARY KEY,
+      user_a_id INT NOT NULL,
+      user_b_id INT NOT NULL,
+      temp_username_a VARCHAR(18) NOT NULL,
+      temp_username_b VARCHAR(18) NOT NULL,
+      interest_a VARCHAR(20) NULL,
+      interest_b VARCHAR(20) NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'active',
+      started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      ended_at DATETIME NULL,
+      ended_by INT NULL,
+      end_reason VARCHAR(40) NULL,
+      last_activity_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      KEY random_talk_active_a (user_a_id, status),
+      KEY random_talk_active_b (user_b_id, status),
+      KEY random_talk_started (started_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS random_talk_messages (
+      id VARCHAR(36) PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL,
+      sender_id INT NOT NULL,
+      message_text VARCHAR(600) NOT NULL,
+      moderation_flag VARCHAR(80) NULL,
+      client_message_id VARCHAR(64) NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY random_talk_dedupe (session_id, sender_id, client_message_id),
+      KEY random_talk_message_session (session_id, created_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS random_talk_reports (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL,
+      reporter_user_id INT NOT NULL,
+      reported_user_id INT NOT NULL,
+      category VARCHAR(60) NOT NULL,
+      details VARCHAR(500) DEFAULT '',
+      context_json TEXT NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'open',
+      internal_notes VARCHAR(1000) DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reviewed_by INT NULL,
+      reviewed_at DATETIME NULL,
+      UNIQUE KEY random_talk_one_report (session_id, reporter_user_id),
+      KEY random_talk_report_status (status, created_at),
+      KEY random_talk_report_target (reported_user_id, created_at)
+    )
+  `);
+
   await migrateExistingTables();
   await ensureUserIdentitiesAreUnique();
 
@@ -628,6 +685,8 @@ async function migrateExistingTables() {
       muted_until: "DATETIME NULL",
       kicked_until: "DATETIME NULL",
       banned_until: "DATETIME NULL",
+      random_talk_restricted_until: "DATETIME NULL",
+      random_talk_restriction_reason: "VARCHAR(255) DEFAULT ''",
       delete_requested_at: "DATETIME NULL",
       last_seen: "DATETIME NULL",
       last_online_reward_at: "DATETIME NULL",

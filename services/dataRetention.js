@@ -3,6 +3,8 @@ const pool = require("../database");
 const CHAT_RETENTION_MINUTES = 90;
 const PRIVATE_MESSAGE_RETENTION_DAYS = 7;
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
+const RANDOM_TALK_MESSAGE_RETENTION_DAYS = Math.max(1, Math.min(30, Number(process.env.RANDOM_TALK_RETENTION_DAYS || 7)));
+const RANDOM_TALK_SESSION_RETENTION_DAYS = Math.max(7, Math.min(90, Number(process.env.RANDOM_TALK_SESSION_RETENTION_DAYS || 30)));
 
 let cleanupTimer = null;
 let cleanupRunning = false;
@@ -46,6 +48,17 @@ async function cleanExpiredData() {
       [PRIVATE_MESSAGE_RETENTION_DAYS]
     );
     await pool.query("DELETE FROM notifications WHERE is_read = 1 AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 14 DAY)");
+    await pool.query(
+      "DELETE FROM random_talk_messages WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? DAY)",
+      [RANDOM_TALK_MESSAGE_RETENTION_DAYS]
+    );
+    await pool.query(
+      `DELETE s FROM random_talk_sessions s
+       LEFT JOIN random_talk_reports r ON r.session_id = s.id
+       WHERE r.id IS NULL AND s.ended_at IS NOT NULL
+         AND s.ended_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? DAY)`,
+      [RANDOM_TALK_SESSION_RETENTION_DAYS]
+    );
   } catch (error) {
     console.error("[retention] cleanup failed:", error.message);
   } finally {

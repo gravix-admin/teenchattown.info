@@ -593,8 +593,11 @@ function syncResponsiveLayout() {
 
 async function refreshReportBadge() {
   if (!state.me || !staffRanks.has(state.me.rank)) return setBadge($("#reportBadge"), 0);
-  const reports = await api("/api/admin/reports").catch(() => []);
-  setBadge($("#reportBadge"), reports.filter((report) => report.status === "open").length);
+  const [regular, random] = await Promise.all([
+    api("/api/admin/reports").catch(() => []),
+    ["admin", "chief", "developer"].includes(state.me.rank) ? api("/api/random-talk/admin/report-count").catch(() => ({ count: 0 })) : Promise.resolve({ count: 0 }),
+  ]);
+  setBadge($("#reportBadge"), regular.filter((report) => report.status === "open").length + Number(random.count || 0));
 }
 
 function openEmojiPicker(inputSelector, anchor) {
@@ -874,6 +877,24 @@ function renderRooms() {
   renderRoomGrid();
 }
 
+let randomTalkLoadPromise = null;
+function loadRandomTalk() {
+  if (window.RandomTalk) return Promise.resolve(window.RandomTalk);
+  if (randomTalkLoadPromise) return randomTalkLoadPromise;
+  const cssReady = new Promise((resolve) => {
+    let link = document.querySelector('link[data-random-talk-style]');
+    if (link) return resolve();
+    link = document.createElement("link");
+    link.rel = "stylesheet"; link.href = "/random-talk.css?v=20260715-random-v1"; link.dataset.randomTalkStyle = "1";
+    link.addEventListener("load", resolve, { once: true }); link.addEventListener("error", resolve, { once: true });
+    document.head.appendChild(link);
+  });
+  randomTalkLoadPromise = Promise.all([cssReady, import("/random-talk.js?v=20260715-random-v1")])
+    .then(() => window.RandomTalk)
+    .catch((error) => { randomTalkLoadPromise = null; throw error; });
+  return randomTalkLoadPromise;
+}
+
 function renderRoomGrid() {
   const grid = $("#roomGrid");
   if (!grid) return;
@@ -888,8 +909,11 @@ function renderRoomGrid() {
   }
   const query = String($("#roomSearch")?.value || "").trim().toLowerCase();
   const visibleRooms = state.rooms.filter((room) => !query || `${room.name || ""} ${room.description || ""}`.toLowerCase().includes(query));
-  $("#roomGalleryCount") && ($("#roomGalleryCount").textContent = `${visibleRooms.length} ${visibleRooms.length === 1 ? "room" : "rooms"}`);
-  grid.innerHTML = visibleRooms.map((room) => `
+  const randomTalkVisible = !query || "random talk stranger private anonymous".includes(query);
+  const total = visibleRooms.length + (randomTalkVisible ? 1 : 0);
+  $("#roomGalleryCount") && ($("#roomGalleryCount").textContent = `${total} ${total === 1 ? "room" : "rooms"}`);
+  const randomTalkCard = randomTalkVisible ? `<article class="room-card random-talk-room-card"><div class="random-talk-room-art" aria-hidden="true"><i></i><i></i><b>?</b></div><span>Private matching</span><strong>Random Talk</strong><small>Meet one stranger at a time with a temporary name and safety controls.</small><div class="room-card-footer"><button data-random-talk type="button">Open Random Talk</button></div></article>` : "";
+  grid.innerHTML = randomTalkCard + visibleRooms.map((room) => `
     <article class="room-card ${Number(room.id) === Number(state.currentRoomId) ? "active" : ""} ${Number(room.staff_only) === 1 ? "staff-room" : ""}">
       <img src="${html(room.image_url || room.imageUrl || "/assets/room-main.svg")}" alt="" loading="lazy" decoding="async" />
       <span>${Number(room.is_pinned) === 1 ? "Pinned" : Number(room.staff_only) === 1 ? "Staff only" : roomLocked(room) ? "Locked" : "Open now"}</span>
@@ -898,6 +922,7 @@ function renderRoomGrid() {
       <div class="room-card-footer"><button data-room-card="${room.id}" type="button">${Number(room.id) === Number(state.currentRoomId) ? "You are here" : "Enter room"}</button>${canManage ? `<button class="room-manage-button" data-room-menu="${room.id}" type="button" aria-label="Manage ${html(room.name)}">...</button>` : ""}</div>
     </article>
   `).join("") || '<div class="empty-state room-empty"><strong>No matching rooms</strong><p class="muted">Try a different search.</p></div>';
+  $("[data-random-talk]", grid)?.addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { const feature = await loadRandomTalk(); await feature.open(); } catch (error) { toast("Random Talk could not open. Your normal chat is still available."); event.currentTarget.disabled = false; } });
   $$("[data-room-card]").forEach((button) => button.addEventListener("click", async () => switchRoom(button.dataset.roomCard)));
   $$("[data-room-menu]").forEach((button) => button.addEventListener("click", () => openRoomManager(button.dataset.roomMenu)));
 }
@@ -3701,6 +3726,19 @@ async function renderAdmin() {
           ${["open", "reviewing", "resolved", "dismissed"].map((status) => `<option value="${status}" ${status === report.status ? "selected" : ""}>${status}</option>`).join("")}
         </select>
       </div>`).join("") || '<p class="muted">No reports yet.</p>'}</div></section>
+    <section class="panel admin-panel"><div class="section-title-row"><h2>Random Talk safety</h2><small>Private 30-day aggregates; context loads only when opened</small></div>
+      <div class="admin-stats compact-stats">
+        <article class="stat-card"><strong>${Number(data.randomTalkMetrics?.sessions || 0)}</strong><span>Matches</span></article>
+        <article class="stat-card"><strong>${Math.round(Number(data.randomTalkMetrics?.average_session_seconds || 0) / 60)}m</strong><span>Avg session</span></article>
+        <article class="stat-card"><strong>${Number(data.randomTalkMetrics?.skip_rate || 0)}%</strong><span>Skip rate</span></article>
+        <article class="stat-card"><strong>${Number(data.randomTalkMetrics?.reports_per_100_sessions || 0)}</strong><span>Reports / 100</span></article>
+      </div><div class="admin-table">${(data.randomTalkReports || []).map((report) => `
+      <div class="report-row random-talk-report-row">
+        <span><strong>${html(report.category)}</strong><small>By ${html(report.reporter_name)} about ${html(report.reported_name)} · ${Number(report.previous_offence_count || 0)} previous reports</small></span>
+        <p>${html(report.details || "No additional details")}</p>
+        <input data-random-report-notes="${report.id}" maxlength="1000" value="${html(report.internal_notes || "")}" placeholder="Internal staff note" />
+        <div class="report-queue-actions"><select data-random-report-status="${report.id}">${["open", "reviewing", "resolved", "dismissed"].map((status) => `<option value="${status}" ${status === report.status ? "selected" : ""}>${status}</option>`).join("")}</select><button data-random-report-context="${report.id}" type="button">View context</button><button class="danger-action" data-random-restrict="${report.reported_user_id}" type="button">Restrict access</button></div>
+      </div>`).join("") || '<p class="muted">No Random Talk reports yet.</p>'}</div></section>
     <section class="panel admin-panel"><h2>Private chats</h2><div class="admin-table">${(data.privateConversations || []).map((chat) => `
       <div class="admin-private-row">
         <span class="private-chat-pair">
@@ -3753,6 +3791,25 @@ async function renderAdmin() {
   $$("[data-report-status]").forEach((select) => select.addEventListener("change", async () => {
     await api(`/api/admin/reports/${select.dataset.reportStatus}`, { method: "PATCH", body: JSON.stringify({ status: select.value }) });
     toast("Report updated.");
+  }));
+  $$("[data-random-report-status]").forEach((select) => select.addEventListener("change", async () => {
+    const notes = $$("[data-random-report-notes]").find((input) => input.dataset.randomReportNotes === select.dataset.randomReportStatus)?.value || "";
+    await api(`/api/random-talk/admin/reports/${select.dataset.randomReportStatus}`, { method: "PATCH", body: JSON.stringify({ status: select.value, internalNotes: notes }) });
+    toast("Random Talk report updated.");
+    refreshReportBadge().catch(() => {});
+  }));
+  $$("[data-random-report-context]").forEach((button) => button.addEventListener("click", async () => {
+    const context = await api(`/api/random-talk/admin/reports/${button.dataset.randomReportContext}/context`);
+    $("#userActionBody").innerHTML = `<div class="staff-card"><span class="eyebrow">Safety context</span><h2>Recent Random Talk messages</h2><div class="admin-table">${(context.messages || []).map((message) => `<p><strong>${html(message.sender)}</strong> ${html(message.body)}<small>${formatDate(message.createdAt)} ${formatTime(message.createdAt)}</small></p>`).join("") || '<p class="muted">No retained messages.</p>'}</div></div>`;
+    $("#userActionModal").showModal();
+  }));
+  $$("[data-random-restrict]").forEach((button) => button.addEventListener("click", async () => {
+    const minutes = Number(prompt("Restrict Random Talk for how many minutes?", "60"));
+    if (!minutes) return;
+    const reason = prompt("Reason shown to the user", "Random Talk safety restriction.");
+    if (reason === null) return;
+    await api(`/api/random-talk/admin/restrict/${button.dataset.randomRestrict}`, { method: "POST", body: JSON.stringify({ minutes, reason }) });
+    toast("Random Talk access restricted.");
   }));
   $$("[data-admin-delete-chat]").forEach((button) => button.addEventListener("click", async () => {
     const [userOneId, userTwoId] = button.dataset.adminDeleteChat.split(":");
@@ -3892,6 +3949,33 @@ const realtimeHandlers = {
   "sus-reward"(data = {}) {
     window.SusGame?.handleRealtime?.("reward", data);
     refreshUsersLight().catch(() => {});
+  },
+  "random-talk-state"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("state", data);
+  },
+  "random-talk-match-found"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("match", data);
+  },
+  "random-talk-message"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("message", data);
+  },
+  "random-talk-typing"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("typing", data);
+  },
+  "random-talk-partner-disconnected"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("partner-disconnected", data);
+  },
+  "random-talk-partner-reconnected"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("partner-reconnected", data);
+  },
+  "random-talk-session-ended"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("ended", data);
+  },
+  "random-talk-report-confirmed"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("report", data);
+  },
+  "random-talk-error"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("error", data);
   },
   "message-updated"(data = {}) {
     const message = state.messages.find((item) => Number(item.id) === Number(data.id));
@@ -4063,6 +4147,7 @@ function handleAuthFailure(_error) {
 }
 
 async function logout() {
+  await window.RandomTalk?.close?.();
   await api("/api/auth/logout", { method: "POST" }).catch(() => {});
   localStorage.removeItem("tct_token");
   location.reload();
@@ -4536,6 +4621,14 @@ window.TCTGameBridge = {
   renderGames,
   getState: () => state,
   socketConnected: () => Boolean(state.socket?.connected),
+};
+window.TCTRandomTalkBridge = {
+  api,
+  html,
+  toast,
+  getState: () => state,
+  socketConnected: () => Boolean(state.socket?.connected),
+  emit: (event, payload) => state.socket?.connected && state.socket.emit(event, payload),
 };
 
 applyTheme(localStorage.getItem("tct_theme") || "dark");

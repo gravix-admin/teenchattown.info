@@ -103,6 +103,26 @@ router.get("/dashboard", async (req, res) => {
      LEFT JOIN users target ON target.id = r.target_user_id
      ORDER BY r.created_at DESC LIMIT 30`
   );
+  const [randomTalkReports] = await pool.query(
+    `SELECT r.id, r.reporter_user_id, r.reported_user_id, r.category, r.details, r.status,
+            r.internal_notes, r.created_at, reporter.username AS reporter_name,
+            reported.username AS reported_name,
+            (SELECT COUNT(*) FROM random_talk_reports prior
+             WHERE prior.reported_user_id = r.reported_user_id AND prior.id <> r.id) AS previous_offence_count
+     FROM random_talk_reports r
+     JOIN users reporter ON reporter.id = r.reporter_user_id
+     JOIN users reported ON reported.id = r.reported_user_id
+     ORDER BY FIELD(r.status, 'open', 'reviewing', 'resolved', 'dismissed'), r.created_at DESC
+     LIMIT 30`
+  );
+  const [[randomTalkMetrics]] = await pool.query(
+    `SELECT COUNT(*) AS sessions,
+            COALESCE(ROUND(AVG(CASE WHEN ended_at IS NOT NULL THEN TIMESTAMPDIFF(SECOND, started_at, ended_at) END)), 0) AS average_session_seconds,
+            COALESCE(ROUND(100 * SUM(end_reason = 'skipped') / NULLIF(COUNT(*), 0), 1), 0) AS skip_rate,
+            COALESCE(ROUND(100 * (SELECT COUNT(*) FROM random_talk_reports r WHERE r.created_at >= UTC_TIMESTAMP() - INTERVAL 30 DAY) / NULLIF(COUNT(*), 0), 1), 0) AS reports_per_100_sessions
+     FROM random_talk_sessions
+     WHERE started_at >= UTC_TIMESTAMP() - INTERVAL 30 DAY`
+  );
   const [privateConversations] = await pool.query(
     `SELECT c.user_one_id, u1.username AS user_one_name, u1.avatar_url AS user_one_avatar,
             c.user_two_id, u2.username AS user_two_name, u2.avatar_url AS user_two_avatar,
@@ -128,6 +148,8 @@ router.get("/dashboard", async (req, res) => {
     permissions,
     logs,
     reports,
+    randomTalkReports,
+    randomTalkMetrics,
     privateConversations,
     ranks,
     staffTools,
