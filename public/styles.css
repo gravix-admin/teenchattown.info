@@ -4886,6 +4886,15 @@ body.session-authenticated .main {
   white-space: pre-wrap;
   word-break: break-word;
 }
+#chatView .message:not(.message-system) .message-body {
+  display: table;
+  max-width: min(1100px, calc(100% - 30px));
+  border: 1px solid rgba(68, 79, 104, .72);
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: rgba(37, 40, 50, .58);
+}
+#chatView .message-body:empty { display: none; }
 #chatView .reply-preview {
   display: inline-grid;
   max-width: min(800px, calc(100% - 36px));
