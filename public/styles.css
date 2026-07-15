@@ -4763,6 +4763,12 @@ body.session-authenticated .main {
   cursor: default;
   transition: background-color .14s ease;
 }
+#chatView .message {
+  border-top: 1px solid rgba(68, 79, 104, .62);
+}
+#chatView .message:last-child {
+  border-bottom: 1px solid rgba(68, 79, 104, .62);
+}
 #chatView .message:hover,
 #chatView .message.menu-open {
   background: rgba(255, 255, 255, .025);
@@ -4885,14 +4891,6 @@ body.session-authenticated .main {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-}
-#chatView .message:not(.message-system) .message-body {
-  display: table;
-  max-width: min(1100px, calc(100% - 30px));
-  border: 1px solid rgba(68, 79, 104, .72);
-  border-radius: 5px;
-  padding: 4px 7px;
-  background: rgba(37, 40, 50, .58);
 }
 #chatView .message-body:empty { display: none; }
 #chatView .reply-preview {
