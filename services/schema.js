@@ -1013,10 +1013,10 @@ async function migrateLegacyUserData() {
 
 async function seedDefaults() {
   const [[backgroundMigration]] = await pool.query("SELECT setting_value FROM site_settings WHERE setting_key = 'default_room_background_version'");
-  if (backgroundMigration?.setting_value !== "arc-grid-v1") {
-    await pool.query("UPDATE users SET chat_background = 'arc-grid' WHERE chat_background IS NULL OR chat_background = '' OR chat_background = 'moonlake'");
+  if (backgroundMigration?.setting_value !== "arc-grid-v2") {
+    await pool.query("UPDATE users SET chat_background = 'arc-grid'");
     await pool.query(
-      "INSERT INTO site_settings (setting_key, setting_value) VALUES ('default_room_background_version', 'arc-grid-v1') ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)"
+      "INSERT INTO site_settings (setting_key, setting_value) VALUES ('default_room_background_version', 'arc-grid-v2') ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)"
     );
   }
 
