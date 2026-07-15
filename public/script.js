@@ -1,5 +1,5 @@
 function removeDuplicateDocumentShells() {
-  const singletonIds = ["authScreen", "app", "drawer", "profileModal", "editProfileModal", "userActionModal", "imageLightbox"];
+  const singletonIds = ["authScreen", "app", "drawer", "profileModal", "editProfileModal", "userActionModal", "welcomeChoiceModal", "imageLightbox"];
   singletonIds.forEach((id) => {
     document.querySelectorAll(`#${id}`).forEach((node, index) => {
       if (index > 0) node.remove();
@@ -70,6 +70,7 @@ const state = {
   usersRefreshTimer: null,
   messagesRefreshTimer: null,
   bootstrapPromise: null,
+  welcomeSession: null,
   syncing: false,
   lastSyncAt: 0,
   hiddenAt: 0,
@@ -802,6 +803,7 @@ async function bootstrap() {
     const previousRoomId = Number(state.currentRoomId || localStorage.getItem("tct_current_room_id")) || null;
     const data = await api("/api/auth/me");
     state.me = data.me;
+    state.welcomeSession = data.session || null;
     if (Number(persistedStore?.userId || 0) !== Number(state.me?.id || 0)) {
       state.storeCache = null;
       state.storeCacheAt = 0;
@@ -841,6 +843,7 @@ async function bootstrap() {
     loadFriends().catch(() => {});
     loadMessages().catch((error) => toast(error.message));
     state.lastSyncAt = Date.now();
+    queueMicrotask(() => maybeShowWelcomeChoice(state.welcomeSession));
   })();
   try {
     return await state.bootstrapPromise;
@@ -893,6 +896,93 @@ function loadRandomTalk() {
     .then(() => window.RandomTalk)
     .catch((error) => { randomTalkLoadPromise = null; throw error; });
   return randomTalkLoadPromise;
+}
+
+let welcomeChannel = null;
+let welcomeRestoreFocus = null;
+
+function welcomeSeenKey(session = state.welcomeSession) {
+  return session?.id && state.me?.id ? `tctWelcomeSeen:${state.me.id}:${session.id}` : "";
+}
+
+function markWelcomeLocally(session = state.welcomeSession) {
+  const key = welcomeSeenKey(session);
+  if (!key) return;
+  try { sessionStorage.setItem(key, "1"); } catch (_error) {}
+}
+
+function welcomeWasSeenLocally(session = state.welcomeSession) {
+  const key = welcomeSeenKey(session);
+  if (!key) return false;
+  try { return sessionStorage.getItem(key) === "1"; } catch (_error) { return false; }
+}
+
+function closeWelcomeChoice() {
+  const dialog = $("#welcomeChoiceModal");
+  if (dialog?.open) dialog.close();
+  document.body.classList.remove("welcome-choice-open");
+}
+
+function announceWelcomeCompletion(session, action) {
+  const detail = { type: "welcome-choice-completed", sessionId: session.id, action };
+  welcomeChannel?.postMessage(detail);
+  try { localStorage.setItem("tct_welcome_choice_event", JSON.stringify({ ...detail, at: Date.now() })); } catch (_error) {}
+}
+
+function finishWelcomeChoice(action, { announce = true } = {}) {
+  const session = state.welcomeSession;
+  if (!session?.id) return closeWelcomeChoice();
+  session.shouldShowWelcomeChoice = false;
+  markWelcomeLocally(session);
+  if (announce) announceWelcomeCompletion(session, action);
+  api("/api/auth/session/welcome-seen", { method: "POST", body: JSON.stringify({ action }) }).catch(() => {});
+  closeWelcomeChoice();
+}
+
+function suppressWelcomeFromAnotherTab(detail) {
+  if (detail?.type !== "welcome-choice-completed" || detail.sessionId !== state.welcomeSession?.id) return;
+  state.welcomeSession.shouldShowWelcomeChoice = false;
+  markWelcomeLocally();
+  closeWelcomeChoice();
+}
+
+function setupWelcomeCrossTab() {
+  if ("BroadcastChannel" in window) {
+    welcomeChannel = new BroadcastChannel("teentown-session-events");
+    welcomeChannel.addEventListener("message", (event) => suppressWelcomeFromAnotherTab(event.data));
+  }
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "tct_welcome_choice_event" || !event.newValue) return;
+    try { suppressWelcomeFromAnotherTab(JSON.parse(event.newValue)); } catch (_error) {}
+  });
+}
+
+async function openMainRoomFromWelcome() {
+  const mainRoom = state.rooms.find((room) => String(room.name || "").trim().toLowerCase() === "main room");
+  if (!mainRoom) throw new Error("Main Room is not available right now.");
+  if (Number(state.currentRoomId) !== Number(mainRoom.id)) await switchRoom(mainRoom.id);
+  else {
+    setView("chat");
+    renderRooms();
+  }
+  requestAnimationFrame(() => $("#messageInput")?.focus({ preventScroll: true }));
+}
+
+function maybeShowWelcomeChoice(session) {
+  if (!session?.shouldShowWelcomeChoice || !session.id || !state.me) return;
+  if (welcomeWasSeenLocally(session)) {
+    session.shouldShowWelcomeChoice = false;
+    return;
+  }
+  const dialog = $("#welcomeChoiceModal");
+  if (!dialog || dialog.open) return;
+  welcomeRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : $("#messageInput");
+  $("#welcomeChoiceTitle").textContent = session.welcomeType === "new"
+    ? `Hey, ${state.me.username} \u{1F44B} Welcome to TeenChatTown!`
+    : `Hey, ${state.me.username} \u{1F44B} Welcome back!`;
+  document.body.classList.add("welcome-choice-open");
+  dialog.showModal();
+  requestAnimationFrame(() => $("[data-welcome-choice='random-talk']")?.focus({ preventScroll: true }));
 }
 
 function renderRoomGrid() {
@@ -4208,6 +4298,40 @@ function setupDobSelects() {
 }
 
 function bindEvents() {
+  setupWelcomeCrossTab();
+  const welcomeDialog = $("#welcomeChoiceModal");
+  $("#welcomeChoiceClose")?.addEventListener("click", () => finishWelcomeChoice("dismissed"));
+  welcomeDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    finishWelcomeChoice("dismissed");
+  });
+  welcomeDialog?.addEventListener("click", (event) => {
+    if (event.target === welcomeDialog) finishWelcomeChoice("dismissed");
+  });
+  welcomeDialog?.addEventListener("close", () => {
+    document.body.classList.remove("welcome-choice-open");
+    welcomeRestoreFocus?.focus?.({ preventScroll: true });
+    welcomeRestoreFocus = null;
+  });
+  $$('[data-welcome-choice]').forEach((button) => button.addEventListener("click", async () => {
+    const choice = button.dataset.welcomeChoice;
+    finishWelcomeChoice(choice);
+    if (choice === "random-talk") {
+      try {
+        const feature = await loadRandomTalk();
+        await feature.open();
+      } catch (_error) {
+        toast("Random Talk could not open right now. Open Rooms to retry; you can still join the Main Room.");
+      }
+      return;
+    }
+    try {
+      await openMainRoomFromWelcome();
+    } catch (_error) {
+      toast("We couldn't open the Main Room right now. Please try again.");
+    }
+  }));
+
   $$("[data-auth-tab]").forEach((button) => button.addEventListener("click", () => {
     $$("[data-auth-tab]").forEach((node) => node.classList.remove("active"));
     button.classList.add("active");

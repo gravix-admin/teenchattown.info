@@ -193,6 +193,20 @@ async function initSchema() {
   `);
 
   await query(`
+    CREATE TABLE IF NOT EXISTS welcome_sessions (
+      id CHAR(64) PRIMARY KEY,
+      user_id INT NOT NULL,
+      previous_last_seen DATETIME NULL,
+      welcome_type VARCHAR(16) NULL,
+      presented_at DATETIME NULL,
+      completed_at DATETIME NULL,
+      action VARCHAR(24) NULL,
+      started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      KEY welcome_session_user_started (user_id, started_at)
+    )
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS rooms (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(80) NOT NULL,

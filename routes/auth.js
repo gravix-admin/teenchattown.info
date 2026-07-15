@@ -10,6 +10,7 @@ const { calculateAge, publicUser, rankBadges } = require("../services/userServic
 const { broadcast } = require("../services/events");
 const { clientIp, countryFromHeaders, refreshUserLocation } = require("../services/geoLocation");
 const { PURCHASABLE_RANKS } = require("../services/ranks");
+const { createAuthSession, claimWelcomeChoice, completeWelcomeChoice } = require("../services/welcomeSessionService");
 const {
   normalizeUsername,
   normalizeEmail,
@@ -107,7 +108,9 @@ router.post("/register", async (req, res) => {
   }
   refreshUserLocation(result.insertId, req).catch((error) => console.warn("Country detection failed:", error.message));
   const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [result.insertId]);
-  res.status(201).json({ token: sign(rows[0]) });
+  const token = sign(rows[0]);
+  await createAuthSession(token, rows[0], { isNewRegistration: true }).catch((error) => console.warn("Welcome session creation failed:", error.message));
+  res.status(201).json({ token });
 });
 
 router.post("/login", async (req, res) => {
@@ -119,9 +122,11 @@ router.post("/login", async (req, res) => {
   }
   if (user.banned_until && new Date(user.banned_until) > new Date()) return res.status(403).json({ error: "This account is banned.", code: "BANNED", reason: user.ban_reason || "This account has been banned." });
   if (user.kicked_until && new Date(user.kicked_until) > new Date()) return res.status(403).json({ error: "You were temporarily kicked.", code: "KICKED", reason: user.kick_reason || "You were temporarily removed by staff.", until: user.kicked_until });
+  const token = sign(user);
+  await createAuthSession(token, user).catch((error) => console.warn("Welcome session creation failed:", error.message));
   await pool.query("UPDATE users SET last_seen = NOW() WHERE id = ?", [user.id]);
   refreshUserLocation(user.id, req).catch((error) => console.warn("Country detection failed:", error.message));
-  res.json({ token: sign(user) });
+  res.json({ token });
 });
 
 router.post("/logout", requireAuth, async (req, res) => {
@@ -138,6 +143,12 @@ router.get("/me", requireAuth, async (req, res) => {
     req.user.rank_until = null;
     req.user.rank_plan = null;
     req.user.rank_base = null;
+  }
+  let welcomeSession = { id: null, startedAt: null, shouldShowWelcomeChoice: false, welcomeType: null };
+  try {
+    welcomeSession = await claimWelcomeChoice(req.authToken, req.user);
+  } catch (error) {
+    console.warn("Welcome session lookup failed:", error.message);
   }
   if (!req.user.last_online_reward_at || (Date.now() - new Date(req.user.last_online_reward_at).getTime()) >= 10 * 60 * 1000) {
     await pool.query("UPDATE users SET diamonds = diamonds + 3, last_online_reward_at = NOW(), last_seen = NOW() WHERE id = ?", [req.user.id]);
@@ -174,7 +185,13 @@ router.get("/me", requireAuth, async (req, res) => {
     unreadPm: Number(privateUnread.count || 0),
     rankBadges: badges,
     permissions,
+    session: welcomeSession,
   });
+});
+
+router.post("/session/welcome-seen", requireAuth, async (req, res) => {
+  if (!req.authSessionId) return res.json({ ok: true });
+  res.json(await completeWelcomeChoice(req.authSessionId, req.user.id, String(req.body.action || "dismissed")));
 });
 
 router.get("/users", requireAuth, async (req, res) => {

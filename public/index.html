@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-  <link rel="stylesheet" href="/styles.css?v=20260714-focused-fixes-v10" />
+  <link rel="stylesheet" href="/styles.css?v=20260715-welcome-v1" />
   <link rel="stylesheet" href="/sus-game.css?v=20260715-sus-v1" />
   </head>
   <body>
@@ -302,13 +302,39 @@
       <div id="userActionBody"></div>
     </dialog>
 
+    <dialog class="modal welcome-choice-modal" id="welcomeChoiceModal" role="dialog" aria-modal="true" aria-labelledby="welcomeChoiceTitle" aria-describedby="welcomeChoiceSubtitle">
+      <div class="welcome-choice-card">
+        <button class="welcome-choice-close" id="welcomeChoiceClose" type="button" aria-label="Close welcome message">&times;</button>
+        <div class="welcome-choice-decoration" aria-hidden="true"><span>&#10024;</span><span>&#127775;</span><span>&#10024;</span></div>
+        <div class="welcome-choice-heading">
+          <span class="welcome-wave" aria-hidden="true">&#128075;</span>
+          <p class="eyebrow">Your town, your choice</p>
+          <h2 id="welcomeChoiceTitle">Welcome to TeenChatTown</h2>
+          <p id="welcomeChoiceSubtitle">What would you like to do today?</p>
+        </div>
+        <div class="welcome-choice-options">
+          <button class="welcome-choice-option stranger" data-welcome-choice="random-talk" type="button">
+            <span class="welcome-choice-icon" aria-hidden="true">&#127917;</span>
+            <span><strong>Stranger Talk</strong><small>Get matched privately with one random person.</small></span>
+            <em aria-hidden="true">&rarr;</em>
+          </button>
+          <button class="welcome-choice-option group" data-welcome-choice="main-room" type="button">
+            <span class="welcome-choice-icon" aria-hidden="true">&#128101;</span>
+            <span><strong>Group Chat</strong><small>Join everyone in the Main Room.</small></span>
+            <em aria-hidden="true">&rarr;</em>
+          </button>
+        </div>
+        <small class="welcome-choice-footer">You can switch rooms anytime.</small>
+      </div>
+    </dialog>
+
     <dialog class="image-lightbox" id="imageLightbox" aria-label="Image preview">
       <button class="image-lightbox-close" data-close-lightbox type="button">x</button>
       <img id="imageLightboxImage" alt="" />
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-  <script src="/script.js?v=20260715-random-v1"></script>
+  <script src="/script.js?v=20260715-welcome-v1"></script>
   <script src="/sus-game-tasks.js?v=20260715-sus-v1"></script>
   <script src="/sus-game.js?v=20260715-sus-v1"></script>
   </body>

@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const pool = require("../database");
 const { rankPower, isStaffRank } = require("../services/ranks");
+const { sessionIdForToken } = require("../services/welcomeSessionService");
 
 const USER_CACHE_TTL_MS = 15000;
 const userCache = new Map();
@@ -33,6 +34,8 @@ function tokenFromRequest(req) {
 async function attachUser(req, _res, next) {
   const token = tokenFromRequest(req);
   req.user = null;
+  req.authToken = token;
+  req.authSessionId = token ? sessionIdForToken(token) : null;
   if (!token) return next();
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
