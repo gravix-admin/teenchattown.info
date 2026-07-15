@@ -1,6 +1,6 @@
 const express = require("express");
 const pool = require("../database");
-const { requireAuth } = require("../middleware/auth");
+const { requireAuth, canControl } = require("../middleware/auth");
 const randomTalk = require("../services/randomTalkService");
 
 const router = express.Router();
@@ -14,7 +14,7 @@ function action(handler) {
 }
 
 function requirePanel(req, res, next) {
-  if (!["admin", "chief", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Admin panel access required." });
+  if (!["admin", "chief", "owner", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Admin panel access required." });
   next();
 }
 
@@ -32,7 +32,12 @@ router.post("/report", action(async (req, res) => res.status(201).json(await ran
 router.post("/block", action(async (req, res) => res.json(await randomTalk.block(req.user.id))));
 
 router.get("/admin/report-count", requirePanel, action(async (_req, res) => {
-  const [[row]] = await pool.query("SELECT COUNT(*) AS count FROM random_talk_reports WHERE status = 'open'");
+  const [[row]] = await pool.query(
+    `SELECT COUNT(*) AS count FROM random_talk_reports r
+     JOIN users reporter ON reporter.id = r.reporter_user_id
+     JOIN users reported ON reported.id = r.reported_user_id
+     WHERE r.status = 'open' AND reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'`
+  );
   res.set("Cache-Control", "private, no-store");
   return res.json({ count: Number(row?.count || 0) });
 }));
@@ -49,6 +54,7 @@ router.get("/admin/reports", requirePanel, action(async (_req, res) => {
      JOIN random_talk_sessions s ON s.id = r.session_id
      JOIN users reporter ON reporter.id = r.reporter_user_id
      JOIN users reported ON reported.id = r.reported_user_id
+     WHERE reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'
      ORDER BY FIELD(r.status, 'open', 'reviewing', 'resolved', 'dismissed'), r.created_at DESC
      LIMIT 40`
   );
@@ -57,7 +63,13 @@ router.get("/admin/reports", requirePanel, action(async (_req, res) => {
 }));
 
 router.get("/admin/reports/:id/context", requirePanel, action(async (req, res) => {
-  const [[row]] = await pool.query("SELECT context_json FROM random_talk_reports WHERE id = ?", [req.params.id]);
+  const [[row]] = await pool.query(
+    `SELECT r.context_json FROM random_talk_reports r
+     JOIN users reporter ON reporter.id = r.reporter_user_id
+     JOIN users reported ON reported.id = r.reported_user_id
+     WHERE r.id = ? AND reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'`,
+    [req.params.id]
+  );
   if (!row) return res.status(404).json({ error: "Random Talk report not found." });
   let messages = [];
   try { messages = JSON.parse(row.context_json || "[]"); } catch (_error) {}
@@ -69,17 +81,25 @@ router.patch("/admin/reports/:id", requirePanel, action(async (req, res) => {
   const status = String(req.body.status || "reviewing");
   if (!["open", "reviewing", "resolved", "dismissed"].includes(status)) return res.status(422).json({ error: "Choose a valid report status." });
   const notes = String(req.body.internalNotes || "").trim().slice(0, 1000);
-  await pool.query(
-    "UPDATE random_talk_reports SET status = ?, internal_notes = ?, reviewed_by = ?, reviewed_at = UTC_TIMESTAMP() WHERE id = ?",
+  const [result] = await pool.query(
+    `UPDATE random_talk_reports r
+     JOIN users reporter ON reporter.id = r.reporter_user_id
+     JOIN users reported ON reported.id = r.reported_user_id
+     SET r.status = ?, r.internal_notes = ?, r.reviewed_by = ?, r.reviewed_at = UTC_TIMESTAMP()
+     WHERE r.id = ? AND reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'`,
     [status, notes, req.user.id, req.params.id]
   );
+  if (!result.affectedRows) return res.status(404).json({ error: "Random Talk report not found." });
   await pool.query("INSERT INTO admin_logs (actor_id, action, target_type, target_id, details) VALUES (?, 'random_talk_report', 'random_talk_report', ?, ?)", [req.user.id, req.params.id, JSON.stringify({ status })]);
   return res.json({ ok: true });
 }));
 
 router.post("/admin/restrict/:userId", requirePanel, action(async (req, res) => {
   if (Number(req.params.userId) === Number(req.user.id)) return res.status(400).json({ error: "You cannot restrict yourself." });
-  return res.json(await randomTalk.restrictUser(req.user.id, Number(req.params.userId), req.body.minutes, req.body.reason));
+  const [[target]] = await pool.query("SELECT id, rank_name FROM users WHERE id = ?", [req.params.userId]);
+  if (!target || target.rank_name === "developer") return res.status(404).json({ error: "User not found." });
+  if (!canControl(req.user.rank_name, target.rank_name)) return res.status(403).json({ error: "You cannot restrict this rank." });
+  return res.json(await randomTalk.restrictUser(req.user.id, Number(target.id), req.body.minutes, req.body.reason));
 }));
 
 module.exports = router;

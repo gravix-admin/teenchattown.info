@@ -207,6 +207,14 @@ async function initSchema() {
   `);
 
   await query(`
+    CREATE TABLE IF NOT EXISTS site_settings (
+      setting_key VARCHAR(64) PRIMARY KEY,
+      setting_value VARCHAR(255) NOT NULL DEFAULT '',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS rooms (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(80) NOT NULL,
@@ -1038,6 +1046,7 @@ async function seedDefaults() {
       superadmin: "S-ADM",
       inspector: "INSP",
       manager: "MGR",
+      owner: "OWNER",
       premium: "PREM",
       "s-vip": "S-VIP",
     }[rank] || rank.toUpperCase().slice(0, 6);
@@ -1060,6 +1069,7 @@ async function seedDefaults() {
       inspector: "#14b8a6",
       manager: "#f97316",
       chief: "#f59e0b",
+      owner: "#f4d35e",
       developer: "#22d3ee",
     }[rank] || "#8b5cf6";
     await pool.query(
@@ -1071,7 +1081,7 @@ async function seedDefaults() {
   for (const rank of ranks.filter((rank) => rank !== "developer" && rank !== "bot")) {
     for (const tool of staffTools) {
       const specialDeveloperTool = ["intruderTool", "profileEditTool"].includes(tool);
-      const defaultAllowed = tool !== "viewUserIntel" && !specialDeveloperTool && (["chief", "manager", "inspector", "supervisor", "superadmin"].includes(rank)
+      const defaultAllowed = tool !== "viewUserIntel" && !specialDeveloperTool && (["owner", "chief", "manager", "inspector", "supervisor", "superadmin"].includes(rank)
         || (rank === "admin" && !["seeIp", "postNews", "editProfile"].includes(tool))
         || (rank === "moderator" && ["mute", "kick", "warn", "deleteMessage"].includes(tool))
         || (tool === "sendPm")
@@ -1084,6 +1094,13 @@ async function seedDefaults() {
       );
     }
   }
+
+  await pool.query("INSERT IGNORE INTO site_settings (setting_key, setting_value) VALUES ('developer_profiles_visible', '0')");
+  await pool.query(
+    `INSERT INTO role_permissions (rank_name, tool, allowed)
+     SELECT 'owner', tool, allowed FROM role_permissions WHERE rank_name = 'chief'
+     ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)`
+  );
 
   const [adminRows] = await pool.query("SELECT id FROM users WHERE LOWER(username) = 'admin'");
   if (!adminRows.length) {

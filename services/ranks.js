@@ -17,6 +17,7 @@ const RANKS = [
   "inspector",
   "manager",
   "chief",
+  "owner",
   "developer",
 ];
 
@@ -30,6 +31,7 @@ const STAFF_RANKS = new Set([
   "inspector",
   "manager",
   "chief",
+  "owner",
   "developer",
 ]);
 

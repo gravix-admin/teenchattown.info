@@ -11,6 +11,7 @@ const { broadcast } = require("../services/events");
 const { clientIp, countryFromHeaders, refreshUserLocation } = require("../services/geoLocation");
 const { PURCHASABLE_RANKS } = require("../services/ranks");
 const { createAuthSession, claimWelcomeChoice, completeWelcomeChoice } = require("../services/welcomeSessionService");
+const { developerProfilesVisible } = require("../services/developerVisibilityService");
 const {
   normalizeUsername,
   normalizeEmail,
@@ -42,8 +43,8 @@ async function userDirectory() {
   if (directoryCache.rows && Date.now() - directoryCache.at < DIRECTORY_CACHE_MS) return directoryCache.rows;
   const [rows] = await pool.query(
     `SELECT ${userDirectoryColumns} FROM users
-     WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')
-     ORDER BY FIELD(rank_name,'developer','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','legend','angel','devil','queen','king','s-vip','vip','user'), username`
+     WHERE rank_name NOT IN ('bot', 'developer') AND LOWER(username) NOT IN ('intruder', 'zombie')
+     ORDER BY FIELD(rank_name,'owner','chief','manager','inspector','supervisor','super visor','superadmin','visor','admin','moderator','premium','legend','angel','devil','queen','king','s-vip','vip','user'), username`
   );
   directoryCache.rows = rows;
   directoryCache.at = Date.now();
@@ -65,15 +66,17 @@ function sign(user) {
 
 async function hasProfileTool(user, tool) {
   if (user.rank_name === "developer") return true;
-  const [[row]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = ?", [user.rank_name, tool]);
-  return Boolean(row?.allowed);
+  const ranksToCheck = user.rank_name === "owner" ? ["owner", "chief"] : [user.rank_name];
+  const [[row]] = await pool.query("SELECT MAX(allowed) AS allowed FROM role_permissions WHERE rank_name IN (?) AND tool = ?", [ranksToCheck, tool]);
+  return Boolean(Number(row?.allowed || 0));
 }
 
 async function userPermissions(user) {
   if (user.rank_name === "developer") return Object.fromEntries(exposedTools.map((tool) => [tool, true]));
   const cached = permissionCache.get(user.rank_name);
   if (cached && Date.now() - cached.at < PERMISSION_CACHE_MS) return cached.value;
-  const [rows] = await pool.query("SELECT tool, allowed FROM role_permissions WHERE rank_name = ? AND tool IN (?)", [user.rank_name, exposedTools]);
+  const ranksToCheck = user.rank_name === "owner" ? ["owner", "chief"] : [user.rank_name];
+  const [rows] = await pool.query("SELECT tool, MAX(allowed) AS allowed FROM role_permissions WHERE rank_name IN (?) AND tool IN (?) GROUP BY tool", [ranksToCheck, exposedTools]);
   const permissions = Object.fromEntries(exposedTools.map((tool) => [tool, false]));
   for (const row of rows) permissions[row.tool] = Boolean(row.allowed);
   permissionCache.set(user.rank_name, { value: permissions, at: Date.now() });
@@ -159,17 +162,18 @@ router.get("/me", requireAuth, async (req, res) => {
   }
   req.user.last_seen = new Date();
   cacheUser(req.user);
-  const [roomsResult, users, notificationsResult, privateUnreadResult, friendRequestsResult, badges, permissions] = await Promise.all([
+  const [roomsResult, users, notificationsResult, privateUnreadResult, friendRequestsResult, badges, permissions, developerProfileAccess] = await Promise.all([
     pool.query("SELECT id, name, description, image_url, is_pinned, staff_only, created_by, created_at, IF(password_hash IS NULL OR password_hash = '', 0, 1) AS locked FROM rooms WHERE staff_only = 0 OR ? = 1 ORDER BY CASE WHEN name = 'Main Room' THEN 0 ELSE 1 END, is_pinned DESC, name", [isStaff(req.user) ? 1 : 0]),
     userDirectory(),
     pool.query("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 12", [req.user.id]),
     pool.query("SELECT COUNT(*) AS count FROM private_messages WHERE receiver_id = ? AND read_at IS NULL AND deleted_at IS NULL", [req.user.id]),
     pool.query(`SELECT fr.*, u.username, u.avatar_url, u.rank_name FROM friend_requests fr
       JOIN users u ON u.id = fr.from_user_id
-      WHERE fr.to_user_id = ? AND fr.status = 'pending'
+      WHERE fr.to_user_id = ? AND fr.status = 'pending' AND u.rank_name <> 'developer'
       ORDER BY fr.created_at DESC`, [req.user.id]),
     rankBadges(),
     userPermissions(req.user),
+    developerProfilesVisible(),
   ]);
   const rooms = roomsResult[0];
   const notifications = notificationsResult[0];
@@ -185,6 +189,7 @@ router.get("/me", requireAuth, async (req, res) => {
     unreadPm: Number(privateUnread.count || 0),
     rankBadges: badges,
     permissions,
+    features: { developerProfilesVisible: developerProfileAccess },
     session: welcomeSession,
   });
 });
@@ -253,7 +258,7 @@ router.patch("/me", requireAuth, async (req, res) => {
     const username = normalizeUsername(req.body.username);
     if (!isValidUsername(username)) return res.status(400).json({ error: "Username must be 3-18 letters, numbers, or underscores." });
     if (username.toLowerCase() !== String(req.user.username || "").toLowerCase()) {
-      if (!["vip", "s-vip", "king", "queen", "devil", "angel", "legend", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(req.user.rank_name)) {
+      if (!["vip", "s-vip", "king", "queen", "devil", "angel", "legend", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "owner", "developer"].includes(req.user.rank_name)) {
         return res.status(403).json({ error: "Username change requires VIP or higher." });
       }
       const conflict = await findUserIdentityConflict(pool, { username, excludeId: req.user.id });

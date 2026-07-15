@@ -71,6 +71,7 @@ function requireAuth(req, res, next) {
 function canControl(actorRank, targetRank) {
   if (targetRank === "bot") return false;
   if (actorRank === "developer") return targetRank !== "developer";
+  if (actorRank === "owner") return rankPower(targetRank) < rankPower("owner");
   if (actorRank === "chief") return rankPower(targetRank) < rankPower("chief");
   if (actorRank === "manager") return rankPower(targetRank) < rankPower("manager");
   if (actorRank === "inspector") return rankPower(targetRank) < rankPower("inspector");

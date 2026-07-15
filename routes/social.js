@@ -7,6 +7,7 @@ const { notifyUser, broadcast } = require("../services/events");
 const { publicUser } = require("../services/userService");
 const { audioUpload, imageUpload, fileToDataUrl } = require("../services/upload");
 const { rankPower, normalizeRank } = require("../services/ranks");
+const { canViewDeveloperProfile } = require("../services/developerVisibilityService");
 
 const router = express.Router();
 const galleryUpload = imageUpload("gallery");
@@ -63,7 +64,7 @@ function clearNewsCache() {
 }
 
 function canManageNews(user) {
-  return ["chief", "developer"].includes(String(user?.rank_name || "").toLowerCase());
+  return ["chief", "owner", "developer"].includes(String(user?.rank_name || "").toLowerCase());
 }
 
 async function removeProfileMusicFile(url) {
@@ -103,8 +104,9 @@ async function notification(userId, type, title, body = "") {
 
 async function permission(user, tool) {
   if (user.rank_name === "developer") return true;
-  const [[row]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = ?", [user.rank_name, tool]);
-  return Boolean(row?.allowed);
+  const ranksToCheck = user.rank_name === "owner" ? ["owner", "chief"] : [user.rank_name];
+  const [[row]] = await pool.query("SELECT MAX(allowed) AS allowed FROM role_permissions WHERE rank_name IN (?) AND tool = ?", [ranksToCheck, tool]);
+  return Boolean(Number(row?.allowed || 0));
 }
 
 function isSystemUser(row) {
@@ -115,17 +117,18 @@ router.get("/friends", requireAuth, async (req, res) => {
   const [friends] = await pool.query(
     `SELECT u.id, u.username, u.avatar_url, u.rank_name, u.mood
      FROM friends f JOIN users u ON u.id = f.friend_id
-     WHERE f.user_id = ? ORDER BY u.username`,
+     WHERE f.user_id = ? AND u.rank_name <> 'developer' ORDER BY u.username`,
     [req.user.id]
   );
   const [requests] = await pool.query(
     `SELECT fr.*, u.username, u.avatar_url, u.rank_name
      FROM friend_requests fr JOIN users u ON u.id = fr.from_user_id
-     WHERE fr.to_user_id = ? AND fr.status = 'pending' ORDER BY fr.created_at DESC`,
+     WHERE fr.to_user_id = ? AND fr.status = 'pending' AND u.rank_name <> 'developer' ORDER BY fr.created_at DESC`,
     [req.user.id]
   );
   const [blocks] = await pool.query(
-    `SELECT b.*, u.username, u.avatar_url FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.blocker_id = ?`,
+    `SELECT b.*, u.username, u.avatar_url FROM blocks b JOIN users u ON u.id = b.blocked_id
+     WHERE b.blocker_id = ? AND u.rank_name <> 'developer'`,
     [req.user.id]
   );
   res.json({ friends, requests, blocks });
@@ -140,8 +143,9 @@ router.get("/friends-wall", requireAuth, async (req, res) => {
      FROM wall_posts wp
      JOIN users author ON author.id = wp.author_id
      JOIN users owner ON owner.id = wp.profile_user_id
-     WHERE wp.profile_user_id = ?
-        OR EXISTS (SELECT 1 FROM friends f WHERE f.user_id = ? AND f.friend_id = wp.profile_user_id)
+     WHERE (wp.profile_user_id = ?
+        OR EXISTS (SELECT 1 FROM friends f WHERE f.user_id = ? AND f.friend_id = wp.profile_user_id))
+       AND author.rank_name <> 'developer' AND owner.rank_name <> 'developer'
      ORDER BY wp.created_at DESC
      LIMIT ?`,
     [req.user.id, req.user.id, limit]
@@ -153,6 +157,8 @@ router.get("/friends-wall", requireAuth, async (req, res) => {
 router.post("/friend-requests", requireAuth, async (req, res) => {
   const toUserId = Number(req.body.toUserId);
   if (toUserId === req.user.id) return res.status(400).json({ error: "You cannot friend yourself." });
+  const [[friendTarget]] = await pool.query("SELECT id, rank_name FROM users WHERE id = ?", [toUserId]);
+  if (!friendTarget || (friendTarget.rank_name === "developer" && Number(friendTarget.id) !== Number(req.user.id))) return res.status(404).json({ error: "User not found." });
   const [[blocked]] = await pool.query("SELECT COUNT(*) AS count FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)", [toUserId, req.user.id, req.user.id, toUserId]);
   if (blocked.count) return res.status(403).json({ error: "Friend request blocked." });
   await pool.query(
@@ -190,6 +196,8 @@ router.delete("/friends/:id", requireAuth, async (req, res) => {
 router.post("/blocks", requireAuth, async (req, res) => {
   const blockedId = Number(req.body.userId);
   if (blockedId === req.user.id) return res.status(400).json({ error: "You cannot block yourself." });
+  const [[target]] = await pool.query("SELECT id, rank_name FROM users WHERE id = ?", [blockedId]);
+  if (!target || target.rank_name === "developer") return res.status(404).json({ error: "User not found." });
   await pool.query("INSERT IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", [req.user.id, blockedId]);
   await pool.query("DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)", [req.user.id, blockedId, blockedId, req.user.id]);
   res.status(201).json({ ok: true });
@@ -202,6 +210,8 @@ router.delete("/blocks/:id", requireAuth, async (req, res) => {
 
 router.post("/follows", requireAuth, async (req, res) => {
   const followingId = Number(req.body.userId);
+  const [[target]] = await pool.query("SELECT id, rank_name FROM users WHERE id = ?", [followingId]);
+  if (!target || target.rank_name === "developer") return res.status(404).json({ error: "User not found." });
   await pool.query("INSERT IGNORE INTO follows (follower_id, following_id) VALUES (?, ?)", [req.user.id, followingId]);
   await notification(followingId, "follow", "New follower", `${req.user.username} followed you.`);
   res.status(201).json({ ok: true });
@@ -218,6 +228,7 @@ router.post("/profiles/:id/like", requireAuth, async (req, res) => {
   if (profileUserId === Number(req.user.id)) return res.status(400).json({ error: "You cannot like your own profile." });
   const [[target]] = await pool.query("SELECT id, username, rank_name FROM users WHERE id = ?", [profileUserId]);
   if (!target || isSystemUser(target)) return res.status(404).json({ error: "Profile not found." });
+  if (!(await canViewDeveloperProfile(req.user, target))) return res.status(403).json({ error: "This profile is private.", code: "DEVELOPER_PROFILE_HIDDEN" });
   const [[existing]] = await pool.query("SELECT id FROM profile_likes WHERE profile_user_id = ? AND liker_id = ?", [profileUserId, req.user.id]);
   let liked = false;
   if (existing) {
@@ -236,6 +247,7 @@ router.post("/profiles/:id/like", requireAuth, async (req, res) => {
 router.get("/profiles/:id", requireAuth, async (req, res) => {
   const [[user]] = await pool.query("SELECT * FROM users WHERE id = ?", [req.params.id]);
   if (!user || isSystemUser(user)) return res.status(404).json({ error: "Profile not found." });
+  if (!(await canViewDeveloperProfile(req.user, user))) return res.status(403).json({ error: "This profile is private.", code: "DEVELOPER_PROFILE_HIDDEN" });
   pool.query("UPDATE users SET visitor_count = visitor_count + 1 WHERE id = ?", [req.params.id]).catch(() => {});
   const [[badges], [gifts], [[likes]], [[liked]]] = await Promise.all([
     pool.query(
@@ -261,6 +273,7 @@ router.get("/profiles/:id/social", requireAuth, async (req, res) => {
   const section = String(req.query.section || "wall");
   const [[target]] = await pool.query("SELECT id, username, rank_name FROM users WHERE id = ?", [profileUserId]);
   if (!target || isSystemUser(target)) return res.status(404).json({ error: "Profile not found." });
+  if (!(await canViewDeveloperProfile(req.user, target))) return res.status(403).json({ error: "This profile is private.", code: "DEVELOPER_PROFILE_HIDDEN" });
   res.set("Cache-Control", "private, max-age=12, stale-while-revalidate=30");
   if (section === "gallery") {
     const [gallery] = await pool.query(
@@ -288,6 +301,7 @@ router.post("/profiles/:id/wall", requireAuth, async (req, res) => {
   if (!body) return res.status(400).json({ error: "Wall post cannot be empty." });
   const [[target]] = await pool.query("SELECT id, username, rank_name FROM users WHERE id = ?", [profileUserId]);
   if (!target || isSystemUser(target)) return res.status(404).json({ error: "Profile not found." });
+  if (!(await canViewDeveloperProfile(req.user, target))) return res.status(403).json({ error: "This profile is private.", code: "DEVELOPER_PROFILE_HIDDEN" });
   const [[blocked]] = await pool.query(
     "SELECT COUNT(*) AS count FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
     [profileUserId, req.user.id, req.user.id, profileUserId]
@@ -596,7 +610,7 @@ router.post("/news/:id/comments", requireAuth, async (req, res) => {
 });
 
 router.delete("/news/:id", requireAuth, async (req, res) => {
-  if (!canManageNews(req.user)) return res.status(403).json({ error: "Chief or developer access required." });
+  if (!canManageNews(req.user)) return res.status(403).json({ error: "Higher staff access required." });
   const newsId = Number(req.params.id);
   if (!Number.isInteger(newsId) || newsId < 1) return res.status(400).json({ error: "Invalid news post." });
   const connection = await pool.getConnection();
@@ -626,7 +640,7 @@ router.delete("/news/:id", requireAuth, async (req, res) => {
 });
 
 router.delete("/news", requireAuth, async (req, res) => {
-  if (!canManageNews(req.user)) return res.status(403).json({ error: "Chief or developer access required." });
+  if (!canManageNews(req.user)) return res.status(403).json({ error: "Higher staff access required." });
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -652,7 +666,7 @@ router.delete("/news", requireAuth, async (req, res) => {
 
 router.get("/leaderboards", requireAuth, async (req, res) => {
   const project = "id, username, display_name, avatar_url, rank_name, profile_title, xp, gold, diamonds, message_count";
-  const publicUsers = "rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')";
+  const publicUsers = "rank_name NOT IN ('bot', 'developer') AND LOWER(username) NOT IN ('intruder', 'zombie')";
   const board = String(req.query.board || "").toLowerCase();
   const cached = responseCache.leaderboards.get(board);
   if (cached && Date.now() - cached.at < 15000) {

@@ -57,10 +57,11 @@ async function requireRoomAccess(req, res, next) {
 
 async function hasTool(user, tool) {
   if (user.rank_name === "developer") return true;
-  const [[row]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = ?", [user.rank_name, tool]);
-  if (!row && tool === "sendPm") return true;
-  if (!row && tool === "sendFiles") return user.rank_name !== "vip";
-  return Boolean(row?.allowed);
+  const ranksToCheck = user.rank_name === "owner" ? ["owner", "chief"] : [user.rank_name];
+  const [[row]] = await pool.query("SELECT MAX(allowed) AS allowed FROM role_permissions WHERE rank_name IN (?) AND tool = ?", [ranksToCheck, tool]);
+  if (row?.allowed === null && tool === "sendPm") return true;
+  if (row?.allowed === null && tool === "sendFiles") return user.rank_name !== "vip";
+  return Boolean(Number(row?.allowed || 0));
 }
 
 async function canDeletePrivateChats(user) {
@@ -309,7 +310,7 @@ router.post("/rooms", requireAuth, roomUpload.single("image"), async (req, res) 
 });
 
 router.patch("/rooms/:roomId/pin", requireAuth, async (req, res) => {
-  if (!["chief", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief and Developer can pin rooms." });
+  if (!["chief", "owner", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief, Owner, or higher can pin rooms." });
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
   const pinned = req.body.pinned === undefined ? !Number(room.is_pinned) : Boolean(req.body.pinned);
@@ -320,7 +321,7 @@ router.patch("/rooms/:roomId/pin", requireAuth, async (req, res) => {
 });
 
 router.delete("/rooms/:roomId", requireAuth, async (req, res) => {
-  if (!["chief", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief and Developer can delete rooms." });
+  if (!["chief", "owner", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief, Owner, or higher can delete rooms." });
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
   if (String(room.name).toLowerCase() === "main room") return res.status(400).json({ error: "Main Room cannot be deleted." });

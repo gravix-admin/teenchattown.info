@@ -20,7 +20,7 @@ let matchLock = Promise.resolve();
 
 const INTERESTS = new Set(["Chill", "Informative", "Flirt", "Games", "Fitness", "Music", "Movies", "Study", "Vent", "Random"]);
 const REPORT_CATEGORIES = new Set(["Harassment", "Sexual or inappropriate behaviour", "Hate speech", "Threats", "Spam or scam", "Sharing personal information", "Underage safety concern", "Other"]);
-const RESERVED_NAMES = ["admin", "moderator", "developer", "staff", "townbot", "teenchattown"];
+const RESERVED_NAMES = ["admin", "moderator", "owner", "developer", "staff", "townbot", "teenchattown"];
 const MAX_MESSAGE_LENGTH = Math.max(100, Math.min(600, Number(process.env.RANDOM_TALK_MESSAGE_MAX || 500)));
 const INTEREST_FALLBACK_MS = Math.max(2000, Math.min(30000, Number(process.env.RANDOM_TALK_INTEREST_WAIT_MS || 7000)));
 const RECONNECT_MS = Math.max(10000, Math.min(90000, Number(process.env.RANDOM_TALK_RECONNECT_MS || 30000)));

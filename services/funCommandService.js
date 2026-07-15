@@ -138,7 +138,7 @@ async function handleSteal(roomId, user, targetName) {
     [targetName]
   );
   if (!targetLookup || targetLookup.rank_name === "bot") throw commandError("Choose a valid user to steal from.", 404);
-  if (["chief", "developer"].includes(targetLookup.rank_name)) throw commandError(`${targetLookup.username}'s rank is protected from /steal.`, 403);
+  if (["chief", "owner", "developer"].includes(targetLookup.rank_name)) throw commandError(`${targetLookup.username}'s rank is protected from /steal.`, 403);
   if (Number(targetLookup.id) === Number(user.id)) throw commandError("You cannot steal from yourself.");
 
   const connection = await pool.getConnection();

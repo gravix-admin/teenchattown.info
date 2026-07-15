@@ -12,7 +12,7 @@ function calculateAge(dob) {
 function publicUser(user, viewer = null) {
   if (!user) return null;
   const self = viewer && Number(viewer.id) === Number(user.id);
-  const staffViewer = viewer && ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"].includes(viewer.rank_name);
+  const staffViewer = viewer && ["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "owner", "developer"].includes(viewer.rank_name);
   const sharesOnlineStatus = Number(user.show_online_status ?? 1) === 1;
   return {
     id: user.id,
@@ -22,7 +22,7 @@ function publicUser(user, viewer = null) {
     dob: self ? user.dob : undefined,
     age: self || Number(user.show_age ?? 1) === 1 ? user.age : undefined,
     gender: self || Number(user.show_gender ?? 1) === 1 ? user.gender : undefined,
-    rank: user.rank_name,
+    rank: user.rank_name === "developer" && !self ? "user" : user.rank_name,
     avatarUrl: user.avatar_url,
     bannerUrl: user.banner_url,
     animatedBannerUrl: user.animated_banner_url,
@@ -69,7 +69,7 @@ async function userById(id) {
 }
 
 async function rankBadges() {
-  const [rows] = await pool.query("SELECT * FROM rank_badges");
+  const [rows] = await pool.query("SELECT * FROM rank_badges WHERE rank_name <> 'developer'");
   return Object.fromEntries(rows.map((row) => [row.rank_name, {
     label: row.label,
     color: row.color,
@@ -78,8 +78,8 @@ async function rankBadges() {
 }
 
 async function adminStats() {
-  const [[users]] = await pool.query("SELECT COUNT(*) AS total FROM users WHERE rank_name <> 'bot' AND LOWER(username) NOT IN ('intruder', 'zombie')");
-  const [[staff]] = await pool.query("SELECT COUNT(*) AS total FROM users WHERE rank_name IN ('moderator','admin','visor','superadmin','supervisor','super visor','inspector','manager','chief','developer')");
+  const [[users]] = await pool.query("SELECT COUNT(*) AS total FROM users WHERE rank_name NOT IN ('bot', 'developer') AND LOWER(username) NOT IN ('intruder', 'zombie')");
+  const [[staff]] = await pool.query("SELECT COUNT(*) AS total FROM users WHERE rank_name IN ('moderator','admin','visor','superadmin','supervisor','super visor','inspector','manager','chief','owner')");
   const [[rooms]] = await pool.query("SELECT COUNT(*) AS total FROM rooms");
   const [[reports]] = await pool.query("SELECT COUNT(*) AS total FROM reports WHERE status = 'open'");
   return { totalUsers: users.total, staffCount: staff.total, rooms: rooms.total, openReports: reports.total };

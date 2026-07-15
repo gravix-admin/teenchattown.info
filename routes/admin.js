@@ -8,6 +8,7 @@ const { ranks, staffTools } = require("../services/schema");
 const { broadcast, notifyUser } = require("../services/events");
 const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { getIntruderState, resetIntruderScores, updateIntruderSettings } = require("../services/intruderService");
+const { developerProfilesVisible, setDeveloperProfilesVisible } = require("../services/developerVisibilityService");
 const {
   normalizeUsername,
   normalizeEmail,
@@ -23,22 +24,23 @@ const newsUpload = imageUpload("news");
 const INTRUDER_PREFIX = "::intruder:";
 
 function hasPanel(user) {
-  return ["admin", "chief", "developer"].includes(user.rank_name);
+  return ["admin", "chief", "owner", "developer"].includes(user.rank_name);
 }
 
 function developerOnly(req, res, next) {
-  if (req.user.rank_name !== "developer") return res.status(403).json({ error: "Developer access required." });
+  if (req.user.rank_name !== "developer") return res.status(403).json({ error: "Restricted access required." });
   next();
 }
 
 async function permission(user, tool) {
   if (user.rank_name === "developer") return true;
-  const [[row]] = await pool.query("SELECT allowed FROM role_permissions WHERE rank_name = ? AND tool = ?", [user.rank_name, tool]);
-  return Boolean(row?.allowed);
+  const ranksToCheck = user.rank_name === "owner" ? ["owner", "chief"] : [user.rank_name];
+  const [[row]] = await pool.query("SELECT MAX(allowed) AS allowed FROM role_permissions WHERE rank_name IN (?) AND tool = ?", [ranksToCheck, tool]);
+  return Boolean(Number(row?.allowed || 0));
 }
 
 async function specialToolAccess(user, tool) {
-  return user.rank_name === "developer" || (user.rank_name === "chief" && await permission(user, tool));
+  return user.rank_name === "developer" || (["chief", "owner"].includes(user.rank_name) && await permission(user, tool));
 }
 
 async function requireIntruderTool(req, res, next) {
@@ -63,9 +65,9 @@ router.use(requireAuth);
 
 router.get("/tools/summary", async (req, res) => {
   const canOpenTools = req.user.rank_name === "developer" || await permission(req.user, "postNews");
-  if (!canOpenTools) return res.status(403).json({ error: "Chief or developer access required." });
-  const [chiefAccess] = req.user.rank_name === "developer"
-    ? await pool.query("SELECT tool, allowed FROM role_permissions WHERE rank_name = 'chief' AND tool IN ('intruderTool', 'profileEditTool')")
+  if (!canOpenTools) return res.status(403).json({ error: "Higher staff access required." });
+  const [staffAccess] = req.user.rank_name === "developer"
+    ? await pool.query("SELECT tool, MIN(allowed) AS allowed FROM role_permissions WHERE rank_name IN ('chief', 'owner') AND tool IN ('intruderTool', 'profileEditTool') GROUP BY tool")
     : [[]];
   const intruderAccess = await specialToolAccess(req.user, "intruderTool");
   const toolState = intruderAccess ? await getIntruderState() : null;
@@ -84,8 +86,9 @@ router.get("/tools/summary", async (req, res) => {
       },
     } : null,
     toolAccess: {
-      intruderTool: Boolean(Number(chiefAccess.find((row) => row.tool === "intruderTool")?.allowed || 0)),
-      profileEditTool: Boolean(Number(chiefAccess.find((row) => row.tool === "profileEditTool")?.allowed || 0)),
+      intruderTool: Boolean(Number(staffAccess.find((row) => row.tool === "intruderTool")?.allowed || 0)),
+      profileEditTool: Boolean(Number(staffAccess.find((row) => row.tool === "profileEditTool")?.allowed || 0)),
+      developerProfilesVisible: await developerProfilesVisible(),
     },
   });
 });
@@ -94,13 +97,14 @@ router.get("/dashboard", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
   const [permissions] = await pool.query("SELECT * FROM role_permissions");
   const [logs] = await pool.query(
-    `SELECT al.*, u.username AS actor_name FROM admin_logs al JOIN users u ON u.id = al.actor_id ORDER BY al.created_at DESC LIMIT 25`
+    `SELECT al.*, u.username AS actor_name FROM admin_logs al JOIN users u ON u.id = al.actor_id WHERE u.rank_name <> 'developer' ORDER BY al.created_at DESC LIMIT 25`
   );
   const [reports] = await pool.query(
     `SELECT r.*, reporter.username AS reporter_name, target.username AS target_name
      FROM reports r
      LEFT JOIN users reporter ON reporter.id = r.reporter_id
      LEFT JOIN users target ON target.id = r.target_user_id
+     WHERE COALESCE(reporter.rank_name, '') <> 'developer' AND COALESCE(target.rank_name, '') <> 'developer'
      ORDER BY r.created_at DESC LIMIT 30`
   );
   const [randomTalkReports] = await pool.query(
@@ -112,6 +116,7 @@ router.get("/dashboard", async (req, res) => {
      FROM random_talk_reports r
      JOIN users reporter ON reporter.id = r.reporter_user_id
      JOIN users reported ON reported.id = r.reported_user_id
+     WHERE reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'
      ORDER BY FIELD(r.status, 'open', 'reviewing', 'resolved', 'dismissed'), r.created_at DESC
      LIMIT 30`
   );
@@ -140,6 +145,7 @@ router.get("/dashboard", async (req, res) => {
      JOIN private_messages latest ON latest.id = c.last_message_id
      JOIN users u1 ON u1.id = c.user_one_id
      JOIN users u2 ON u2.id = c.user_two_id
+     WHERE u1.rank_name <> 'developer' AND u2.rank_name <> 'developer'
      ORDER BY latest.created_at DESC
      LIMIT 20`
   );
@@ -155,8 +161,9 @@ router.get("/dashboard", async (req, res) => {
     staffTools,
     tools: await specialToolAccess(req.user, "intruderTool") ? await getIntruderState() : null,
     toolAccess: {
-      intruderTool: Boolean(Number(permissions.find((p) => p.rank_name === "chief" && p.tool === "intruderTool")?.allowed || 0)),
-      profileEditTool: Boolean(Number(permissions.find((p) => p.rank_name === "chief" && p.tool === "profileEditTool")?.allowed || 0)),
+      intruderTool: ["chief", "owner"].every((rank) => Boolean(Number(permissions.find((p) => p.rank_name === rank && p.tool === "intruderTool")?.allowed || 0))),
+      profileEditTool: ["chief", "owner"].every((rank) => Boolean(Number(permissions.find((p) => p.rank_name === rank && p.tool === "profileEditTool")?.allowed || 0))),
+      developerProfilesVisible: await developerProfilesVisible(),
     },
   });
 });
@@ -170,7 +177,7 @@ router.patch("/users/:id", async (req, res) => {
     if (req.body.rank === "bot") return res.status(403).json({ error: "Bot rank is reserved for system accounts." });
     if (!(await permission(req.user, "changeRank"))) return res.status(403).json({ error: "Your rank cannot change user ranks." });
     if (req.user.rank_name !== "developer" && (target.rank_name === "premium" || req.body.rank === "premium")) {
-      return res.status(403).json({ error: "Only a developer can change or assign Premium rank." });
+      return res.status(403).json({ error: "Premium rank is protected from this action." });
     }
     if (!canControl(req.user.rank_name, req.body.rank)) return res.status(403).json({ error: "You cannot assign that rank." });
     updates.rank_name = req.body.rank;
@@ -311,7 +318,7 @@ router.post("/users/:id/profile-edit", requireProfileEditTool, async (req, res) 
       "UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?",
       [await bcrypt.hash(newPassword, 10), target.id]
     );
-    notifyUser(target.id, "moderation", { action: "password", title: "Password changed", body: "A developer changed your password. Please log in again." });
+    notifyUser(target.id, "moderation", { action: "password", title: "Password changed", body: "An authorised account changed your password. Please log in again." });
     await log(req.user.id, "profile_edit_password", "user", target.id, "password changed");
   } else if (action === "deleteAccount") {
     await pool.query("DELETE FROM users WHERE id = ?", [target.id]);
@@ -415,10 +422,12 @@ router.post("/permissions", async (req, res) => {
   if (!hasPanel(req.user)) return res.status(403).json({ error: "Admin panel access required." });
   const { rank, tool, allowed } = req.body;
   if (rank === "bot" || !ranks.includes(rank) || !staffTools.includes(tool)) return res.status(400).json({ error: "Invalid permission." });
-  if (["intruderTool", "profileEditTool"].includes(tool)) return res.status(400).json({ error: "Use the developer tools panel for this permission." });
+  if (["intruderTool", "profileEditTool"].includes(tool)) return res.status(400).json({ error: "Use the private Tools panel for this permission." });
   if (rankPower(rank) >= rankPower(req.user.rank_name)) return res.status(403).json({ error: "You cannot edit that rank." });
   await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES (?, ?, ?)", [rank, tool, allowed ? 1 : 0]);
+  if (rank === "chief") await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES ('owner', ?, ?)", [tool, allowed ? 1 : 0]);
   authRoutes.invalidatePermissionCache?.(rank);
+  if (rank === "chief") authRoutes.invalidatePermissionCache?.("owner");
   await log(req.user.id, "permission", "rank", null, `${rank}:${tool}:${allowed}`);
   broadcast("users-changed", { rank, tool });
   res.json({ ok: true });
@@ -455,11 +464,19 @@ router.get("/tools", requireIntruderTool, async (_req, res) => {
 router.post("/tools/access", developerOnly, async (req, res) => {
   const tool = String(req.body.tool || "");
   if (!["intruderTool", "profileEditTool"].includes(tool)) return res.status(400).json({ error: "Unknown tool." });
-  await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES ('chief', ?, ?)", [tool, req.body.enabled ? 1 : 0]);
+  await pool.query("REPLACE INTO role_permissions (rank_name, tool, allowed) VALUES ('chief', ?, ?), ('owner', ?, ?)", [tool, req.body.enabled ? 1 : 0, tool, req.body.enabled ? 1 : 0]);
   authRoutes.invalidatePermissionCache?.("chief");
-  await log(req.user.id, "tool_access", "rank", null, `chief:${tool}:${Boolean(req.body.enabled)}`);
-  broadcast("users-changed", { rank: "chief", tool });
+  authRoutes.invalidatePermissionCache?.("owner");
+  await log(req.user.id, "tool_access", "rank", null, `chief+owner:${tool}:${Boolean(req.body.enabled)}`);
+  broadcast("users-changed", { ranks: ["chief", "owner"], tool });
   res.json({ ok: true, tool, enabled: Boolean(req.body.enabled) });
+});
+
+router.post("/tools/developer-profile-access", developerOnly, async (req, res) => {
+  const enabled = await setDeveloperProfilesVisible(Boolean(req.body.enabled));
+  await log(req.user.id, "developer_profile_visibility", "setting", null, String(enabled));
+  broadcast("users-changed", { developerProfilesVisible: enabled });
+  res.json({ ok: true, enabled });
 });
 
 router.post("/tools/intruder", requireIntruderTool, async (req, res) => {

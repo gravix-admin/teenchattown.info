@@ -505,9 +505,9 @@ html.returning-user #authScreen { display: none; }
 .rank-s-vip { background: linear-gradient(135deg, #7c3aed, #ec4899); }
 .rank-king { background: linear-gradient(135deg, #38bdf8, #2563eb); }
 .rank-queen { background: linear-gradient(135deg, #fb7185, #ec4899); }
-.rank-developer { background: linear-gradient(135deg, #22d3ee, #2563eb); }
 .rank-bot { background: linear-gradient(135deg, #334155, #0f172a); color: #e2e8f0; }
 .rank-chief { background: linear-gradient(135deg, #f59e0b, #fef3c7); color: #231200; }
+.rank-owner { background: linear-gradient(135deg, #fff1a8, #f4d35e 55%, #b7791f); color: #241704; }
 .rank-manager { background: linear-gradient(135deg, #f97316, #facc15); color: #241100; }
 .rank-inspector { background: linear-gradient(135deg, #14b8a6, #22d3ee); }
 .rank-supervisor { background: linear-gradient(135deg, #10b981, #84cc16); color: #061a12; }
@@ -1198,7 +1198,7 @@ body.welcome-choice-open { overflow: hidden; }
 }
 .menu-profile h2 { margin: 0 0 5px; }
 .avatar-lg { width: 56px !important; height: 56px !important; box-shadow: 0 0 0 4px rgba(255,255,255,.12); }
-.avatar-lg.developer, .avatar-lg.chief, .avatar-lg.premium { box-shadow: 0 0 0 3px #f7c948, 0 0 26px rgba(247,201,72,.46); }
+.avatar-lg.owner, .avatar-lg.chief, .avatar-lg.premium { box-shadow: 0 0 0 3px #f7c948, 0 0 26px rgba(247,201,72,.46); }
 .wallet-grid { display: grid; gap: 12px; }
 .wallet-card {
   border: 1px solid var(--line);

@@ -31,7 +31,7 @@ function writeLocalCache(key, value) {
 
 const persistedNews = readLocalCache("tct_news_cache");
 const persistedStore = readLocalCache("tct_store_cache");
-const persistedLeaderboards = readLocalCache("tct_leaderboard_cache");
+const persistedLeaderboards = readLocalCache("tct_leaderboard_cache_v2");
 
 const state = {
   token: localStorage.getItem("tct_token") || "",
@@ -67,6 +67,7 @@ const state = {
   compactLayout: null,
   pmExpanded: false,
   permissions: {},
+  developerProfilesVisible: false,
   usersRefreshTimer: null,
   messagesRefreshTimer: null,
   bootstrapPromise: null,
@@ -109,8 +110,8 @@ const state = {
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const staffRanks = new Set(["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "developer"]);
-const rankOrder = ["bot", "user", "vip", "s-vip", "king", "queen", "devil", "angel", "legend", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "developer"];
+const staffRanks = new Set(["moderator", "admin", "visor", "superadmin", "supervisor", "super visor", "inspector", "manager", "chief", "owner", "developer"]);
+const rankOrder = ["bot", "user", "vip", "s-vip", "king", "queen", "devil", "angel", "legend", "premium", "moderator", "admin", "visor", "superadmin", "supervisor", "inspector", "manager", "chief", "owner", "developer"];
 const assignableRanks = rankOrder.filter((rank) => rank !== "bot");
 const systemUsernames = new Set(["intruder", "zombie"]);
 const slashCommands = [
@@ -241,6 +242,7 @@ function toast(message) {
 }
 
 function rankBadge(rank, labelOverride = "") {
+  if (String(rank || "").toLowerCase() === "developer") return "";
   const badge = state.rankBadges[rank] || { label: rank, color: "#8b5cf6" };
   const image = badge.imageUrl ? `<img src="${html(badge.imageUrl)}" alt="" />` : "";
   const label = String(labelOverride || badge.label || rank || "user").slice(0, 18);
@@ -249,6 +251,11 @@ function rankBadge(rank, labelOverride = "") {
 
 function userRankBadge(user) {
   return rankBadge(user?.rank || user?.rank_name, user?.profileTitle || user?.profile_title || "");
+}
+
+function profileRankLine(user, level) {
+  const badge = userRankBadge(user);
+  return `${badge}${badge ? ' <span class="profile-title-dot">-</span> ' : ""}<span class="profile-level">Level ${level}</span>`;
 }
 
 function permissionLabel(tool) {
@@ -543,11 +550,11 @@ function hasTool(tool) {
 }
 
 function canUseIntruderTool() {
-  return state.me?.rank === "developer" || (state.me?.rank === "chief" && hasTool("intruderTool"));
+  return state.me?.rank === "developer" || (["chief", "owner"].includes(state.me?.rank) && hasTool("intruderTool"));
 }
 
 function canUseProfileEditTool() {
-  return state.me?.rank === "developer" || (state.me?.rank === "chief" && hasTool("profileEditTool"));
+  return state.me?.rank === "developer" || (["chief", "owner"].includes(state.me?.rank) && hasTool("profileEditTool"));
 }
 
 function canPostNews() {
@@ -555,7 +562,7 @@ function canPostNews() {
 }
 
 function canManageNews() {
-  return ["chief", "developer"].includes(state.me?.rank);
+  return ["chief", "owner", "developer"].includes(state.me?.rank);
 }
 
 function resetNewsCache() {
@@ -596,7 +603,7 @@ async function refreshReportBadge() {
   if (!state.me || !staffRanks.has(state.me.rank)) return setBadge($("#reportBadge"), 0);
   const [regular, random] = await Promise.all([
     api("/api/admin/reports").catch(() => []),
-    ["admin", "chief", "developer"].includes(state.me.rank) ? api("/api/random-talk/admin/report-count").catch(() => ({ count: 0 })) : Promise.resolve({ count: 0 }),
+    ["admin", "chief", "owner", "developer"].includes(state.me.rank) ? api("/api/random-talk/admin/report-count").catch(() => ({ count: 0 })) : Promise.resolve({ count: 0 }),
   ]);
   setBadge($("#reportBadge"), regular.filter((report) => report.status === "open").length + Number(random.count || 0));
 }
@@ -819,6 +826,7 @@ async function bootstrap() {
     state.friendRequests = data.friendRequests || [];
     state.rankBadges = data.rankBadges || {};
     state.permissions = data.permissions || {};
+    state.developerProfilesVisible = Boolean(data.features?.developerProfilesVisible);
     state.unreadPm = Number(data.unreadPm || 0);
     state.pmUnreadCacheAt = Date.now();
     state.currentRoomId = state.rooms.some((room) => Number(room.id) === Number(previousRoomId))
@@ -989,7 +997,7 @@ function renderRoomGrid() {
   const grid = $("#roomGrid");
   if (!grid) return;
   const canCreate = hasTool("createRoom");
-  const canManage = ["chief", "developer"].includes(state.me?.rank);
+  const canManage = ["chief", "owner", "developer"].includes(state.me?.rank);
   const toolbar = $(".room-gallery-toolbar");
   if (toolbar && !$("#roomCreateButton")) toolbar.insertAdjacentHTML("beforeend", '<button id="roomCreateButton" class="room-add-button" type="button">+ Add room</button>');
   $("#roomCreateButton")?.classList.toggle("hidden", !canCreate);
@@ -2201,7 +2209,7 @@ async function renderLeaderboard({ force = false } = {}) {
   if (!force && cached && Date.now() - cached.at < 30000) return;
   const data = await api(`/api/social/leaderboards?board=${encodeURIComponent(tab)}`, force ? { cache: "no-store" } : {});
   state.leaderboardCache[tab] = { data, at: Date.now() };
-  writeLocalCache("tct_leaderboard_cache", state.leaderboardCache);
+  writeLocalCache("tct_leaderboard_cache_v2", state.leaderboardCache);
   if ($("#leaderboardView").classList.contains("active") && state.leaderboardTab === tab) paintLeaderboard(data, tab);
 }
 
@@ -2363,7 +2371,7 @@ async function openProfile(userId) {
     $("#profileHandle").textContent = `@${String(previewUser.username || "user").toLowerCase()}`;
     $("#profileAvatar").src = avatar(previewUser);
     $("#profileStatusDot").classList.toggle("offline", !previewUser.online);
-    $("#profileRankLine").innerHTML = `${rankBadge(previewUser.rank, previewUser.profileTitle)} <span class="profile-title-dot">-</span> <span class="profile-level">Level ${previewInfo.level}</span>`;
+    $("#profileRankLine").innerHTML = profileRankLine(previewUser, previewInfo.level);
     $("#profileQuote").textContent = previewUser.mood || "Loading the latest profile details...";
     $("#profileCover").style.setProperty("--profile-banner", `url('${previewUser.bannerUrl || "/assets/profile-banner.svg"}')`);
     $("#profileInfo").innerHTML = profileOverviewPanel(previewUser);
@@ -2392,7 +2400,8 @@ async function openProfile(userId) {
   try {
     data = cached && Date.now() - cached.at < 20000 ? cached.data : await api(`/api/social/profiles/${userId}`);
   } catch (error) {
-    if (requestId === state.profileRequestId) $("#profileInfo").innerHTML = `<p class="muted">${html(error.message)}</p>`;
+    if (error.code === "DEVELOPER_PROFILE_HIDDEN") $("#profileModal")?.close();
+    else if (requestId === state.profileRequestId) $("#profileInfo").innerHTML = `<p class="muted">${html(error.message)}</p>`;
     toast(error.message);
     return false;
   }
@@ -2415,7 +2424,7 @@ async function openProfile(userId) {
   $("#profileStatusDot").classList.toggle("offline", !user.online);
   $("#profileName").textContent = displayName(user);
   $("#profileHandle").textContent = `@${user.username.toLowerCase()}`;
-  $("#profileRankLine").innerHTML = `${rankBadge(user.rank, user.profileTitle)} <span class="profile-title-dot">-</span> <span class="profile-level">Level ${info.level}</span>`;
+  $("#profileRankLine").innerHTML = profileRankLine(user, info.level);
   $("#profileQuote").textContent = user.bio || "New to the town. Profile story coming soon.";
   $("#profileCounters").innerHTML = `
     <span class="profile-metric"><b>★</b><strong>Level ${info.level}</strong></span>
@@ -2937,7 +2946,7 @@ function openUserActionPanel(userId) {
 }
 
 async function openDeveloperToolsPanel({ force = false } = {}) {
-  if (!canManageNews()) return toast("Chief or developer access required.");
+  if (!canManageNews()) return toast("Higher staff access required.");
   setDrawerChrome({ title: "Staff tools" });
   $("#drawerBody").innerHTML = '<p class="muted">Loading tools...</p>';
   showDrawer();
@@ -2955,6 +2964,7 @@ async function openDeveloperToolsPanel({ force = false } = {}) {
   const intruder = data.tools?.intruder;
   const intruderNext = intruder?.nextSpawnAt ? `${formatDate(intruder.nextSpawnAt)} ${formatTime(intruder.nextSpawnAt)}` : "Stopped";
   const intruderActive = intruder?.activeRound ? `Active now | ${compactNumber(intruder.activeRound.points)} pts` : "No active round";
+  const toolUsers = [state.me, ...state.users.filter((user) => Number(user.id) !== Number(state.me.id))];
   $("#drawerBody").innerHTML = `
     <div class="developer-tools-drawer">
       <article class="tool-card news-maintenance-card">
@@ -2982,7 +2992,7 @@ async function openDeveloperToolsPanel({ force = false } = {}) {
           </div>
           <small>Each next arrival is picked randomly inside this range.</small>
           <small>Next arrival: ${html(intruderNext)}</small>
-          ${state.me.rank === "developer" ? `<label class="tool-enable-row"><input data-chief-tool="intruderTool" type="checkbox" ${data.toolAccess?.intruderTool ? "checked" : ""} /> Enable for chief</label>` : ""}
+          ${state.me.rank === "developer" ? `<label class="tool-enable-row"><input data-chief-tool="intruderTool" type="checkbox" ${data.toolAccess?.intruderTool ? "checked" : ""} /> Allow for Chief and Owner</label>` : ""}
           <div class="tool-actions">
             <button class="primary" type="submit">${intruder?.enabled ? "Save" : "Start"}</button>
             <button id="drawerIntruderStopButton" type="button" ${intruder?.enabled ? "" : "disabled"}>Stop</button>
@@ -2993,17 +3003,24 @@ async function openDeveloperToolsPanel({ force = false } = {}) {
       <article class="tool-card ${state.me.rank === "developer" ? "" : "hidden"}">
         <div class="tool-card-head">
           <span class="tool-avatar">E</span>
-          <span><strong>Edit profile</strong><small>Allows chief to use the Edit tab on lower ranks.</small></span>
+          <span><strong>Edit profile</strong><small>Allows Chief and Owner to use the Edit tab on lower ranks.</small></span>
         </div>
-        <label class="tool-enable-row"><input data-chief-tool="profileEditTool" type="checkbox" ${data.toolAccess?.profileEditTool ? "checked" : ""} /> Enable for chief</label>
+        <label class="tool-enable-row"><input data-chief-tool="profileEditTool" type="checkbox" ${data.toolAccess?.profileEditTool ? "checked" : ""} /> Allow for Chief and Owner</label>
+      </article>
+      <article class="tool-card ${state.me.rank === "developer" ? "" : "hidden"}">
+        <div class="tool-card-head">
+          <span class="tool-avatar">P</span>
+          <span><strong>View developer profiles</strong><small>When off, other users cannot open profiles belonging to the hidden internal rank.</small></span>
+        </div>
+        <label class="tool-enable-row"><input id="developerProfileAccessToggle" type="checkbox" ${data.toolAccess?.developerProfilesVisible ? "checked" : ""} /> Allow profile viewing</label>
       </article>
       <article class="tool-card value-change-card ${state.me.rank === "developer" ? "" : "hidden"}">
         <div class="tool-card-head">
           <span class="tool-avatar">C</span>
-          <span><strong>Change user value</strong><small>Developer-only balance, XP, and shooter-score control.</small></span>
+          <span><strong>Change user value</strong><small>Private balance, XP, and shooter-score control.</small></span>
         </div>
         <form id="developerValueChangeForm" class="tool-form">
-          <label>User<select name="userId" required>${state.users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(state.me.id) ? "selected" : ""}>${html(user.username)}${Number(user.id) === Number(state.me.id) ? " (you)" : ""}</option>`).join("")}</select></label>
+          <label>User<select name="userId" required>${toolUsers.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(state.me.id) ? "selected" : ""}>${html(user.username)}${Number(user.id) === Number(state.me.id) ? " (you)" : ""}</option>`).join("")}</select></label>
           <div class="tool-range-grid">
             <label>Change<select name="field"><option value="gold">Gold</option><option value="diamonds">Diamonds</option><option value="xp">XP</option><option value="shoot">Shoot score</option></select></label>
             <label>Set value<input name="value" type="number" min="0" step="1" value="0" required /></label>
@@ -3035,7 +3052,7 @@ async function openDeveloperToolsPanel({ force = false } = {}) {
       input.checked = Boolean(result.enabled);
       state.toolsCache = null;
       state.toolsCacheAt = 0;
-      toast("Chief access updated.");
+      toast("Chief and Owner access updated.");
     } catch (error) {
       input.checked = !enabled;
       toast(error.message);
@@ -3043,6 +3060,24 @@ async function openDeveloperToolsPanel({ force = false } = {}) {
       input.disabled = false;
     }
   }));
+  $("#developerProfileAccessToggle")?.addEventListener("change", async (event) => {
+    const input = event.currentTarget;
+    const enabled = input.checked;
+    input.disabled = true;
+    try {
+      const result = await api("/api/admin/tools/developer-profile-access", { method: "POST", body: JSON.stringify({ enabled }) });
+      input.checked = Boolean(result.enabled);
+      state.developerProfilesVisible = Boolean(result.enabled);
+      state.toolsCache = null;
+      state.toolsCacheAt = 0;
+      toast(result.enabled ? "Developer profile viewing enabled." : "Developer profiles are private.");
+    } catch (error) {
+      input.checked = !enabled;
+      toast(error.message);
+    } finally {
+      input.disabled = false;
+    }
+  });
   $("#drawerIntruderToolsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const minIntervalMinutes = Number($("#drawerIntruderMin")?.value || 2);
@@ -3099,7 +3134,7 @@ function openOwnMenu() {
         <button data-own-action="wallet" type="button"><span class="menu-icon">W</span><strong>Wallet</strong></button>
         <hr />
         <button data-own-action="room-options" type="button"><span class="menu-icon">R</span><strong>Room options</strong><small>${html(room?.name || "Current room")}</small><em>&gt;</em></button>
-        ${["admin", "chief", "developer"].includes(state.me.rank) ? `<button data-open-admin-panel type="button"><span class="menu-icon">A</span><strong>Admin panel</strong></button>` : ""}
+        ${["admin", "chief", "owner", "developer"].includes(state.me.rank) ? `<button data-open-admin-panel type="button"><span class="menu-icon">A</span><strong>Admin panel</strong></button>` : ""}
         ${canManageNews() ? `<button data-open-tools-panel type="button"><span class="menu-icon">T</span><strong>Tools</strong></button>` : ""}
         <button data-own-action="logout" type="button"><span class="menu-icon">O</span><strong>Logout</strong></button>
       </div>
@@ -3207,7 +3242,7 @@ function openProfileEditor(section = "edit") {
   const form = $("#editProfileForm");
   if (form && state.me) {
     const canSetTitle = Boolean(state.permissions?.customTitle || state.me.rank === "developer");
-    const canSetStatus = ["premium", "chief", "developer"].includes(state.me.rank);
+    const canSetStatus = ["premium", "chief", "owner", "developer"].includes(state.me.rank);
     $("[data-title-field]")?.classList.toggle("hidden", !canSetTitle);
     $("[data-status-field]")?.classList.toggle("hidden", !canSetStatus);
     form.profileTitle.disabled = !canSetTitle;
@@ -3768,7 +3803,7 @@ async function renderAdmin() {
   const intruderActive = intruder?.activeRound ? `Active now | ${compactNumber(intruder.activeRound.points)} pts` : "No active round";
   const toolsSection = intruder ? `
     <section class="panel admin-panel developer-tools-panel">
-      <div class="section-title-row"><h2>Tools</h2><span class="rank-pill rank-developer">DEV</span></div>
+      <div class="section-title-row"><h2>Tools</h2></div>
       <article class="tool-card intruder-tool-card">
         <div class="tool-card-head">
           <img class="avatar avatar-lg" src="${html(intruder.botAvatarUrl || "/assets/intruder-bot.png")}" alt="" />
@@ -3795,7 +3830,7 @@ async function renderAdmin() {
   $("#adminDashboard").innerHTML = `
     <section class="admin-hero">
       <div>
-        <span class="eyebrow">Developer console</span>
+        <span class="eyebrow">Staff console</span>
         <h2>Admin panel</h2>
         <p>Moderate users, review reports, tune rank permissions, and keep Teen Chat Town clean.</p>
       </div>
