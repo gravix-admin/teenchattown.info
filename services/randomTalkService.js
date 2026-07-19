@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const pool = require("../database");
 const { notifySocketUser, broadcast } = require("./events");
 const { invalidateUserCache } = require("../middleware/auth");
+const wallet = require("./randomTalkWallet");
 
 const profiles = new Map();
 const queue = new Map();
@@ -16,15 +17,16 @@ const messageWindows = new Map();
 const typingTimes = new Map();
 const blockCache = new Map();
 const connectedUsers = new Set();
+const callSignalTimes = new Map();
 let matchLock = Promise.resolve();
 
 const INTERESTS = new Set(["Chill", "Informative", "Flirt", "Games", "Fitness", "Music", "Movies", "Study", "Vent", "Random"]);
-const REPORT_CATEGORIES = new Set(["Harassment", "Sexual or inappropriate behaviour", "Hate speech", "Threats", "Spam or scam", "Sharing personal information", "Underage safety concern", "Other"]);
+const REPORT_CATEGORIES = new Set(["Sexual content", "Harassment", "Hate or threats", "Underage safety concern", "Nudity", "Spam or scam", "Impersonation", "Sharing personal information", "Other"]);
 const RESERVED_NAMES = ["admin", "moderator", "owner", "developer", "staff", "townbot", "teenchattown"];
 const MAX_MESSAGE_LENGTH = Math.max(100, Math.min(600, Number(process.env.RANDOM_TALK_MESSAGE_MAX || 500)));
 const INTEREST_FALLBACK_MS = Math.max(2000, Math.min(30000, Number(process.env.RANDOM_TALK_INTEREST_WAIT_MS || 7000)));
-const RECONNECT_MS = Math.max(10000, Math.min(90000, Number(process.env.RANDOM_TALK_RECONNECT_MS || 30000)));
-const QUEUE_TTL_MS = Math.max(60000, Math.min(10 * 60 * 1000, Number(process.env.RANDOM_TALK_QUEUE_TTL_MS || 180000)));
+const RECONNECT_MS = Math.max(10000, Math.min(90000, Number(process.env.RANDOM_TALK_RECONNECT_MS || Number(process.env.RANDOM_RECONNECT_GRACE_SECONDS || 30) * 1000)));
+const QUEUE_TTL_MS = Math.max(60000, Math.min(10 * 60 * 1000, Number(process.env.RANDOM_TALK_QUEUE_TTL_MS || Number(process.env.RANDOM_MATCH_TIMEOUT_SECONDS || 180) * 1000)));
 const SKIP_COOLDOWN_MS = Math.max(1500, Math.min(10000, Number(process.env.RANDOM_TALK_SKIP_COOLDOWN_MS || 2500)));
 const RECENT_PAIR_MS = 2 * 60 * 1000;
 const RECENT_SESSION_MS = 15 * 60 * 1000;
@@ -39,6 +41,14 @@ function fail(message, status = 400, code = "RANDOM_TALK_ERROR") {
 function nowIso() { return new Date().toISOString(); }
 function ageBand(user) { return Number(user.age || 0) >= 18 ? "adult" : "minor"; }
 function pairKey(a, b) { return [Number(a), Number(b)].sort((x, y) => x - y).join(":"); }
+function participantIdentity(item) {
+  return item.isGuest
+    ? { id: item.userId, isGuest: true, guestSessionId: item.guestSessionId, identityType: "guest" }
+    : { id: item.userId, isGuest: false, identityType: "user" };
+}
+function talkIdentity(item) {
+  return item?.isGuest ? `guest:${Number(item.guestSessionId)}` : `user:${Number(item?.userId ?? item?.id)}`;
+}
 function activeSession(userId) {
   const id = userSessions.get(Number(userId));
   const session = id ? sessions.get(id) : null;
@@ -89,17 +99,20 @@ function publicState(userId) {
       status: "matched",
       temporaryUsername: member(session, id)?.tempUsername,
       selectedInterest: member(session, id)?.interest || null,
-      partner: { temporaryUsername: other.tempUsername, interest: other.interest || null, connected: other.connected !== false },
+      partner: { temporaryUsername: other.tempUsername, interest: other.interest || null, connected: other.connected !== false, guest: Boolean(other.isGuest) },
       messages: session.messages.slice(-40).map((message) => publicMessage(message, id)),
       connectedAt: session.createdAt,
+      matchId: session.id,
+      creditBalance: Number(member(session, id)?.creditBalance || 0),
+      guest: Boolean(member(session, id)?.isGuest),
       socketOnly: true,
     };
   }
   const queued = queue.get(id);
-  if (queued) return { status: "queued", temporaryUsername: queued.tempUsername, selectedInterest: queued.interest, joinedAt: queued.joinedAt };
+  if (queued) return { status: "queued", temporaryUsername: queued.tempUsername, selectedInterest: queued.interest, joinedAt: queued.joinedAt, creditBalance: Number(queued.creditBalance || 0), guest: Boolean(queued.isGuest) };
   const ended = endedStates.get(id);
   if (ended) return { status: "ended", ...ended };
-  if (profile) return { status: "idle", temporaryUsername: profile.tempUsername, selectedInterest: profile.interest, safetyConfirmed: true };
+  if (profile) return { status: "idle", temporaryUsername: profile.tempUsername, selectedInterest: profile.interest, safetyConfirmed: true, creditBalance: Number(profile.creditBalance || 0), guest: Boolean(profile.isGuest) };
   return { status: "setup" };
 }
 
@@ -121,12 +134,20 @@ async function withMatchLock(callback) {
 }
 
 async function usersBlocked(a, b) {
-  const key = pairKey(a, b);
+  const key = pairKey(a.userId, b.userId);
   const cached = blockCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.blocked;
+  const identityA = talkIdentity(a);
+  const identityB = talkIdentity(b);
   const [[row]] = await pool.query(
-    "SELECT COUNT(*) AS count FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)",
-    [a, b, b, a]
+    `SELECT
+       (SELECT COUNT(*) FROM random_talk_blocks
+        WHERE ((blocker_identity = ? AND blocked_identity = ?) OR (blocker_identity = ? AND blocked_identity = ?))
+          AND (expires_at IS NULL OR expires_at > UTC_TIMESTAMP()))
+       + ? * (SELECT COUNT(*) FROM blocks
+              WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)) AS count`,
+    [identityA, identityB, identityB, identityA, !a.isGuest && !b.isGuest ? 1 : 0,
+      a.userId, b.userId, b.userId, a.userId]
   );
   const blocked = Number(row?.count || 0) > 0;
   blockCache.set(key, { blocked, expiresAt: Date.now() + 60000 });
@@ -148,7 +169,7 @@ async function findCandidate(entry) {
   for (const other of queue.values()) {
     if (other.userId === entry.userId || other.ageBand !== entry.ageBand) continue;
     const score = interestScore(entry, other, now);
-    if (!Number.isFinite(score) || await usersBlocked(entry.userId, other.userId)) continue;
+    if (!Number.isFinite(score) || await usersBlocked(entry, other)) continue;
     const recent = Number(recentPairs.get(pairKey(entry.userId, other.userId)) || 0) > now - RECENT_PAIR_MS;
     candidates.push({ other, score: score + (recent ? 10 : 0), recent });
   }
@@ -157,18 +178,38 @@ async function findCandidate(entry) {
 }
 
 async function createMatch(a, b) {
+  const matchId = crypto.randomUUID();
+  let balances;
+  try {
+    balances = await wallet.chargeMatchStart([participantIdentity(a), participantIdentity(b)], matchId);
+  } catch (error) {
+    if (error.code !== "INSUFFICIENT_CREDITS") throw error;
+    for (const entry of [a, b]) {
+      const balance = await wallet.ensureWallet(participantIdentity(entry)).catch(() => 0);
+      entry.creditBalance = balance;
+      if (balance < wallet.START_COST) {
+        queue.delete(entry.userId);
+        endedStates.set(entry.userId, endedCopy("insufficient_credits", null, "You need at least 80 credits to start another match."));
+        emitState(entry.userId);
+      }
+    }
+    return false;
+  }
   const session = {
-    id: crypto.randomUUID(), status: "active", createdAt: nowIso(), lastActivityAt: nowIso(), lastPersistAt: Date.now(), messages: [],
+    id: matchId, status: "active", createdAt: nowIso(), lastActivityAt: nowIso(), lastPersistAt: Date.now(), messages: [], call: null, chargedMinutes: 1,
     users: [
-      { userId: a.userId, tempUsername: a.tempUsername, interest: a.interest, ageBand: a.ageBand, connected: true },
-      { userId: b.userId, tempUsername: b.tempUsername, interest: b.interest, ageBand: b.ageBand, connected: true },
+      { ...a, connected: true, creditBalance: balances[wallet.identity(participantIdentity(a)).key] },
+      { ...b, connected: true, creditBalance: balances[wallet.identity(participantIdentity(b)).key] },
     ],
   };
   await pool.query(
     `INSERT INTO random_talk_sessions
-      (id, user_a_id, user_b_id, temp_username_a, temp_username_b, interest_a, interest_b, status, last_activity_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'active', UTC_TIMESTAMP())`,
-    [session.id, a.userId, b.userId, a.tempUsername, b.tempUsername, a.interest, b.interest]
+      (id, user_a_id, user_b_id, user_a_type, user_b_type, guest_a_id, guest_b_id,
+       temp_username_a, temp_username_b, interest_a, interest_b, status, last_activity_at,
+       charged_minutes_a, charged_minutes_b, credits_charged_a, credits_charged_b)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', UTC_TIMESTAMP(), 1, 1, 80, 80)`,
+    [session.id, a.isGuest ? null : a.userId, b.isGuest ? null : b.userId, a.isGuest ? "guest" : "user", b.isGuest ? "guest" : "user",
+      a.isGuest ? a.guestSessionId : null, b.isGuest ? b.guestSessionId : null, a.tempUsername, b.tempUsername, a.interest, b.interest]
   );
   queue.delete(a.userId); queue.delete(b.userId);
   endedStates.delete(a.userId); endedStates.delete(b.userId);
@@ -177,6 +218,27 @@ async function createMatch(a, b) {
   notifySocketUser(a.userId, "random-talk-match-found", { temporaryUsername: b.tempUsername, interest: b.interest || null });
   notifySocketUser(b.userId, "random-talk-match-found", { temporaryUsername: a.tempUsername, interest: a.interest || null });
   emitSessionState(session);
+  const timer = setInterval(() => chargeNextMinute(session).catch((error) => console.error("[random-talk billing]", error.message)), 60000);
+  timer.unref?.(); session.billingTimer = timer;
+  return true;
+}
+
+async function chargeNextMinute(session) {
+  if (!session || session.status !== "active") return;
+  const minute = Number(session.chargedMinutes || 1) + 1;
+  try {
+    const balances = await wallet.chargeStartedMinute(session.users.map(participantIdentity), session.id, minute);
+    session.chargedMinutes = minute;
+    session.users.forEach((item) => { item.creditBalance = balances[wallet.identity(participantIdentity(item)).key]; });
+    await pool.query(
+      "UPDATE random_talk_sessions SET charged_minutes_a = ?, charged_minutes_b = ?, credits_charged_a = ?, credits_charged_b = ? WHERE id = ?",
+      [minute, minute, 60 + minute * 20, 60 + minute * 20, session.id]
+    );
+    emitSessionState(session);
+  } catch (error) {
+    if (error.code !== "INSUFFICIENT_CREDITS") throw error;
+    await endSession(session, 0, "insufficient_credits", {});
+  }
 }
 
 async function drainQueue() {
@@ -188,8 +250,7 @@ async function drainQueue() {
       if (!queue.has(entry.userId)) continue;
       const candidate = await findCandidate(entry);
       if (!candidate || !queue.has(candidate.userId)) continue;
-      await createMatch(entry, candidate);
-      paired = true;
+      paired = await createMatch(entry, candidate);
       break;
     }
   }
@@ -199,9 +260,11 @@ async function join(user, input = {}) {
   assertAccess(user);
   if (activeSession(user.id) || queue.has(Number(user.id))) return publicState(user.id);
   if (input.safetyConfirmed !== true) throw fail("Please acknowledge the Random Talk safety notice.", 422, "SAFETY_REQUIRED");
+  const creditBalance = await wallet.ensureWallet(user);
   const profile = {
     userId: Number(user.id), tempUsername: sanitizeTempName(input.temporaryUsername),
-    interest: normalizedInterest(input.interest, user), ageBand: ageBand(user), configuredAt: nowIso(),
+    interest: normalizedInterest(input.interest, user), ageBand: user.ageBand || ageBand(user), configuredAt: nowIso(),
+    isGuest: Boolean(user.isGuest), guestSessionId: user.guestSessionId || null, creditBalance,
   };
   profiles.set(profile.userId, profile);
   endedStates.delete(profile.userId);
@@ -217,6 +280,8 @@ async function search(user) {
     if (activeSession(id)) return publicState(id);
     const profile = profiles.get(id);
     if (!profile) throw fail("Set up your temporary Random Talk name first.", 409, "SETUP_REQUIRED");
+    profile.creditBalance = await wallet.ensureWallet(user);
+    if (profile.creditBalance < wallet.START_COST) throw fail("You need at least 80 credits to start another match.", 402, "INSUFFICIENT_CREDITS");
     if (!queue.has(id)) queue.set(id, { ...profile, joinedAt: nowIso() });
     endedStates.delete(id);
     emitState(id);
@@ -241,6 +306,11 @@ function endedCopy(reason, other, message) {
 async function endSession(session, actorUserId, reason, options = {}) {
   if (!session || session.status !== "active") return;
   session.status = "ended";
+  clearInterval(session.billingTimer);
+  if (session.call) {
+    session.users.forEach((item) => notifySocketUser(item.userId, "random-talk-call-signal", { kind: "hangup", reason: "conversation-ended" }));
+    session.call = null;
+  }
   session.endedAt = nowIso();
   const actorId = Number(actorUserId || 0);
   const actor = actorId ? member(session, actorId) : null;
@@ -305,8 +375,10 @@ async function message(user, input = {}) {
   const item = { id: crypto.randomUUID(), senderId: Number(user.id), body, createdAt: nowIso() };
   try {
     await pool.query(
-      "INSERT INTO random_talk_messages (id, session_id, sender_id, message_text, client_message_id) VALUES (?, ?, ?, ?, ?)",
-      [item.id, session.id, user.id, body, clientMessageId]
+      `INSERT INTO random_talk_messages
+        (id, session_id, sender_id, sender_type, sender_guest_id, message_text, client_message_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [item.id, session.id, user.isGuest ? null : user.id, user.isGuest ? "guest" : "user", user.isGuest ? user.guestSessionId : null, body, clientMessageId]
     );
   } catch (error) {
     if (error.code === "ER_DUP_ENTRY") return { duplicate: true };
@@ -365,9 +437,12 @@ async function report(user, input = {}) {
   const context = session.messages.slice(-20).map((item) => ({ sender: Number(item.senderId) === Number(user.id) ? "reporter" : "reported", body: item.body.slice(0, MAX_MESSAGE_LENGTH), createdAt: item.createdAt }));
   const [result] = await pool.query(
     `INSERT IGNORE INTO random_talk_reports
-      (session_id, reporter_user_id, reported_user_id, category, details, context_json)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [session.id, user.id, reported.userId, category, details, JSON.stringify(context)]
+      (session_id, reporter_user_id, reported_user_id, reporter_guest_id, reported_guest_id, reporter_identity, category, details, context_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [session.id, user.isGuest ? null : user.id, reported.isGuest ? null : reported.userId,
+      user.isGuest ? user.guestSessionId : null, reported.isGuest ? reported.guestSessionId : null,
+      user.isGuest ? `guest:${user.guestSessionId}` : `user:${user.id}`,
+      category, details, JSON.stringify(context)]
   );
   if (!result.affectedRows) throw fail("You already reported this conversation.", 409, "REPORT_DUPLICATE");
   broadcast("report-created", { randomTalk: true });
@@ -385,9 +460,19 @@ async function block(userId) {
     if (!session) throw fail("That stranger is no longer available to block.", 404, "BLOCK_SESSION_EXPIRED");
     const other = partner(session, id);
     if (!other) throw fail("Stranger not found.", 404);
-    await pool.query("INSERT IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", [id, other.userId]);
-    await pool.query("DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)", [id, other.userId, other.userId, id]);
-    blockCache.set(pairKey(id, other.userId), { blocked: true, expiresAt: Date.now() + 60000 });
+    const self = member(session, id);
+    if (!self?.isGuest && !other.isGuest) {
+      await pool.query("INSERT IGNORE INTO blocks (blocker_id, blocked_id) VALUES (?, ?)", [id, other.userId]);
+      await pool.query("DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)", [id, other.userId, other.userId, id]);
+    } else {
+      await pool.query(
+        `INSERT INTO random_talk_blocks (blocker_identity, blocked_identity, expires_at)
+         VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 DAY))
+         ON DUPLICATE KEY UPDATE created_at = UTC_TIMESTAMP(), expires_at = VALUES(expires_at)`,
+        [talkIdentity(self), talkIdentity(other)]
+      );
+    }
+    blockCache.set(pairKey(id, other.userId), { blocked: true, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
     if (session.status === "active") await endSession(session, id, "blocked", { actorMessage: "Stranger blocked. You will not be matched again.", partnerMessage: "The conversation ended." });
     return { ok: true };
   });
@@ -421,12 +506,90 @@ function reconnect(userId) {
   return publicState(id);
 }
 
+async function stateFor(user) {
+  const balance = await wallet.ensureWallet(user);
+  const id = Number(user.id);
+  const profile = profiles.get(id);
+  if (profile) profile.creditBalance = balance;
+  const queued = queue.get(id);
+  if (queued) queued.creditBalance = balance;
+  const session = activeSession(id);
+  const self = session && member(session, id);
+  if (self) self.creditBalance = balance;
+  const state = publicState(id);
+  return {
+    ...state,
+    temporaryUsername: state.status === "setup" && user.isGuest ? user.display_name : state.temporaryUsername,
+    creditBalance: balance,
+    guest: Boolean(user.isGuest),
+    pricing: { connection: 60, startedMinute: 20, minimumToMatch: 80 },
+  };
+}
+
+function validateSignalPayload(payload) {
+  const kind = String(payload?.kind || "");
+  if (!["request", "accept", "decline", "offer", "answer", "ice", "hangup", "media-state"].includes(kind)) throw fail("Invalid call signal.", 422, "CALL_SIGNAL_INVALID");
+  const clean = { kind };
+  if (["request", "accept"].includes(kind)) {
+    clean.mode = ["voice", "video"].includes(payload.mode) ? payload.mode : "voice";
+  } else if (["offer", "answer"].includes(kind)) {
+    const description = payload.description || {};
+    if (description.type !== kind || typeof description.sdp !== "string" || description.sdp.length > 120000) throw fail("Invalid call description.", 422, "CALL_SIGNAL_INVALID");
+    clean.description = { type: description.type, sdp: description.sdp };
+  } else if (kind === "ice") {
+    const encoded = JSON.stringify(payload.candidate ?? null);
+    if (encoded.length > 16000) throw fail("Invalid call candidate.", 422, "CALL_SIGNAL_INVALID");
+    clean.candidate = payload.candidate ?? null;
+  } else if (kind === "media-state") {
+    clean.microphone = Boolean(payload.microphone);
+    clean.camera = Boolean(payload.camera);
+  } else if (kind === "decline" || kind === "hangup") {
+    clean.reason = cleanText(payload.reason).slice(0, 80);
+  }
+  return clean;
+}
+
+function callSignal(userId, payload = {}) {
+  const id = Number(userId);
+  const session = activeSession(id);
+  if (!session) throw fail("This conversation has ended.", 409, "SESSION_ENDED");
+  const other = partner(session, id);
+  if (!other || other.connected === false) throw fail("The stranger is reconnecting.", 409, "PARTNER_DISCONNECTED");
+  const clean = validateSignalPayload(payload);
+  const now = Date.now();
+  if (clean.kind === "request") {
+    if (now - Number(callSignalTimes.get(id) || 0) < 3000) throw fail("Wait a moment before calling again.", 429, "CALL_RATE_LIMIT");
+    if (session.call) throw fail("A call request is already active.", 409, "CALL_ALREADY_ACTIVE");
+    callSignalTimes.set(id, now);
+    session.call = { status: "ringing", callerId: id, calleeId: other.userId, mode: clean.mode, updatedAt: nowIso() };
+  } else if (clean.kind === "accept") {
+    if (!session.call || session.call.status !== "ringing" || Number(session.call.calleeId) !== id) throw fail("This call request is no longer available.", 409, "CALL_NOT_RINGING");
+    session.call.status = "active";
+  } else if (clean.kind === "decline") {
+    if (!session.call || Number(session.call.calleeId) !== id) throw fail("This call request is no longer available.", 409, "CALL_NOT_RINGING");
+    session.call = null;
+  } else if (["offer", "answer", "ice", "media-state"].includes(clean.kind)) {
+    if (!session.call || session.call.status !== "active") throw fail("Accept the call before sharing media.", 409, "CALL_NOT_ACTIVE");
+    if (clean.kind === "offer" && Number(session.call.callerId) !== id) throw fail("Only the caller can start negotiation.", 403, "CALL_SIGNAL_FORBIDDEN");
+    if (clean.kind === "answer" && Number(session.call.calleeId) !== id) throw fail("Only the recipient can answer negotiation.", 403, "CALL_SIGNAL_FORBIDDEN");
+  } else if (clean.kind === "hangup") {
+    session.call = null;
+  }
+  notifySocketUser(other.userId, "random-talk-call-signal", clean);
+  return true;
+}
+
 function handleDisconnect(userId) {
   const id = Number(userId);
   connectedUsers.delete(id);
   queue.delete(id);
   const session = activeSession(id);
   if (!session) return;
+  if (session.call) {
+    const other = partner(session, id);
+    if (other) notifySocketUser(other.userId, "random-talk-call-signal", { kind: "hangup", reason: "peer-disconnected" });
+    session.call = null;
+  }
   const self = member(session, id);
   if (self) self.connected = false;
   const other = partner(session, id);
@@ -479,5 +642,5 @@ setInterval(() => {
 
 module.exports = {
   INTERESTS: [...INTERESTS], REPORT_CATEGORIES: [...REPORT_CATEGORIES], initialize, join, search, cancelSearch,
-  publicState, message, typing, skip, report, block, leave, reconnect, handleDisconnect, restrictUser,
+  publicState, stateFor, message, typing, callSignal, skip, report, block, leave, reconnect, handleDisconnect, restrictUser,
 };

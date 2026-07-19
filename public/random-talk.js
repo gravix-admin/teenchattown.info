@@ -2,7 +2,7 @@
   "use strict";
 
   const interests = ["Chill", "Informative", "Flirt", "Games", "Fitness", "Music", "Movies", "Study", "Vent", "Random"];
-  const reportCategories = ["Harassment", "Sexual or inappropriate behaviour", "Hate speech", "Threats", "Spam or scam", "Sharing personal information", "Underage safety concern", "Other"];
+  const reportCategories = ["Sexual content", "Harassment", "Hate or threats", "Underage safety concern", "Nudity", "Spam or scam", "Impersonation", "Sharing personal information", "Other"];
   let root = null;
   let current = { status: "setup" };
   let setupStep = 1;
@@ -11,6 +11,14 @@
   let openState = false;
   let searchingTicker = null;
   let typingOffTimer = null;
+  let durationTicker = null;
+  let peer = null;
+  let localStream = null;
+  let remoteStream = null;
+  let pendingIce = [];
+  let callConfig = null;
+  let callState = { status: "idle", mode: null, incoming: false, microphone: false, camera: false, facingMode: "user" };
+  let disconnectCallTimer = null;
 
   function bridge() { return window.TCTRandomTalkBridge; }
   function esc(value) { return bridge().html(value); }
@@ -25,7 +33,8 @@
 
   function shell(content, subtitle = "Meet one stranger at a time.") {
     const canModerate = current.status === "matched" || (current.status === "ended" && current.canReport);
-    return `<section class="rt-shell" role="dialog" aria-modal="true" aria-label="Random Talk"><header class="rt-header"><div class="rt-brand"><b class="rt-brand-mark">RT</b><span><strong>Random Talk</strong><small>${esc(subtitle)}</small></span></div><div class="rt-header-actions"><button class="rt-button" data-rt-safety type="button">Safety</button><button class="rt-button danger" data-rt-close type="button">Leave</button></div></header><div class="rt-body">${content}</div><div class="rt-safety-menu hidden" data-rt-safety-menu><strong>Stay anonymous</strong><small class="rt-muted">Never share passwords, private addresses, financial details, school information or contact details.</small>${canModerate ? '<button class="rt-button" data-rt-report type="button">Report stranger</button><button class="rt-button" data-rt-block type="button">Block stranger</button>' : ""}</div><div class="rt-modal-layer hidden" data-rt-modal></div></section>`;
+    const balance = Number(current.creditBalance || 0);
+    return `<section class="rt-shell" role="dialog" aria-modal="true" aria-label="Random Talk"><header class="rt-header"><div class="rt-brand"><b class="rt-brand-mark">RT</b><span><strong>Random Talk</strong><small>${esc(subtitle)}</small></span></div><div class="rt-header-actions"><span class="rt-credit-chip" title="Random Talk credits">${balance.toLocaleString()} credits</span><button class="rt-button" data-rt-buy type="button">Buy</button><button class="rt-button" data-rt-safety type="button">Safety</button><button class="rt-button danger" data-rt-close type="button">Leave</button></div></header><div class="rt-body">${content}</div>${bridge().isGuest?.() ? '<aside class="rt-guest-cta"><span><b>Guest</b> Create an account to unlock the full community and buy more credits.</span><div><button data-rt-auth="register" type="button">Register</button><button data-rt-auth="login" type="button">Log In</button></div></aside>' : ""}<div class="rt-safety-menu hidden" data-rt-safety-menu><strong>Stay anonymous</strong><small class="rt-muted">Never share passwords, private addresses, financial details, school information or contact details. Calls are live and are not recorded.</small>${canModerate ? '<button class="rt-button" data-rt-report type="button">Report stranger</button><button class="rt-button" data-rt-block type="button">Block stranger</button>' : ""}</div><div class="rt-modal-layer hidden" data-rt-modal></div></section>`;
   }
 
   function bindShell() {
@@ -33,6 +42,8 @@
     root.querySelector("[data-rt-safety]")?.addEventListener("click", () => root.querySelector("[data-rt-safety-menu]")?.classList.toggle("hidden"));
     root.querySelector("[data-rt-report]")?.addEventListener("click", openReport);
     root.querySelector("[data-rt-block]")?.addEventListener("click", openBlockConfirm);
+    root.querySelector("[data-rt-buy]")?.addEventListener("click", () => bridge().isGuest?.() ? openGuestCreditNotice() : bridge().openStore?.());
+    root.querySelectorAll("[data-rt-auth]").forEach((button) => button.addEventListener("click", () => bridge().openAuth?.(button.dataset.rtAuth)));
   }
 
   function stepper(step) { return `<div class="rt-stepper" aria-label="Setup step ${step} of 3">${[1,2,3].map((number) => `<i class="${number <= step ? "active" : ""}"></i>`).join("")}</div>`; }
@@ -96,15 +107,252 @@
     area.scrollTop = area.scrollHeight;
   }
 
+  async function ensureCallConfig() {
+    if (!callConfig) callConfig = await api("/call-config", { cache: "no-store" });
+    if (!callConfig.enabled) throw new Error("Voice and video are waiting for the site's private TURN relay configuration.");
+    return callConfig;
+  }
+
+  function mediaErrorMessage(error, mode) {
+    if (!window.isSecureContext) return "Calls require the secure HTTPS site.";
+    if (!navigator.mediaDevices?.getUserMedia) return "This browser does not support live calls.";
+    if (error?.name === "NotAllowedError") return `${mode === "video" ? "Camera or microphone" : "Microphone"} permission was denied. You can keep chatting by text.`;
+    if (error?.name === "NotFoundError") return `No available ${mode === "video" ? "camera or microphone" : "microphone"} was found.`;
+    if (error?.name === "NotReadableError") return "Your camera or microphone is busy in another app.";
+    return error?.message || "The call device could not start.";
+  }
+
+  function mediaConstraints(mode, facingMode = callState.facingMode) {
+    const dataSaver = localStorage.getItem("tct_rt_data_saver") !== "0";
+    return {
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      video: mode === "video" ? {
+        facingMode: { ideal: facingMode },
+        width: { ideal: dataSaver ? 480 : 640, max: dataSaver ? 640 : 1280 },
+        height: { ideal: dataSaver ? 360 : 480, max: dataSaver ? 480 : 720 },
+        frameRate: { ideal: dataSaver ? 15 : 24, max: dataSaver ? 18 : 30 },
+      } : false,
+    };
+  }
+
+  async function acquireMedia(mode, facingMode = callState.facingMode) {
+    await ensureCallConfig();
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(mode, facingMode)); }
+    catch (error) { throw new Error(mediaErrorMessage(error, mode)); }
+    stopLocalMedia();
+    localStream = stream;
+    callState.mode = mode;
+    callState.microphone = stream.getAudioTracks().some((track) => track.readyState === "live");
+    callState.camera = stream.getVideoTracks().some((track) => track.readyState === "live");
+    callState.facingMode = facingMode;
+    syncCallUi();
+    return stream;
+  }
+
+  function stopLocalMedia() {
+    localStream?.getTracks().forEach((track) => track.stop());
+    localStream = null;
+    callState.microphone = false;
+    callState.camera = false;
+  }
+
+  function destroyPeer() {
+    clearTimeout(disconnectCallTimer);
+    pendingIce = [];
+    if (peer) {
+      peer.ontrack = null;
+      peer.onicecandidate = null;
+      peer.onconnectionstatechange = null;
+      peer.close();
+    }
+    peer = null;
+    remoteStream = null;
+  }
+
+  function endCall({ notify = true, reason = "ended" } = {}) {
+    if (notify && callState.status !== "idle") bridge().emit("random-talk-call-signal", { kind: "hangup", reason });
+    destroyPeer();
+    stopLocalMedia();
+    callState = { status: "idle", mode: null, incoming: false, microphone: false, camera: false, facingMode: "user" };
+    syncCallUi();
+  }
+
+  async function createPeer() {
+    if (peer) return peer;
+    const config = await ensureCallConfig();
+    peer = new RTCPeerConnection({ iceServers: config.iceServers, iceTransportPolicy: "relay", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" });
+    localStream?.getTracks().forEach((track) => peer.addTrack(track, localStream));
+    peer.onicecandidate = (event) => bridge().emit("random-talk-call-signal", { kind: "ice", candidate: event.candidate?.toJSON?.() || event.candidate || null });
+    peer.ontrack = (event) => {
+      remoteStream = event.streams[0] || remoteStream || new MediaStream();
+      if (!event.streams[0]) remoteStream.addTrack(event.track);
+      syncCallUi();
+    };
+    peer.onconnectionstatechange = () => {
+      if (["connected", "completed"].includes(peer?.connectionState)) {
+        callState.status = "active";
+        clearTimeout(disconnectCallTimer);
+        syncCallUi();
+      } else if (["failed", "closed"].includes(peer?.connectionState)) {
+        endCall({ notify: peer?.connectionState === "failed", reason: "connection-failed" });
+        setError("The call ended because the connection failed. Text chat is still available.");
+      } else if (peer?.connectionState === "disconnected") {
+        clearTimeout(disconnectCallTimer);
+        disconnectCallTimer = setTimeout(() => {
+          if (peer?.connectionState === "disconnected") endCall({ notify: true, reason: "weak-connection" });
+        }, 8000);
+        syncCallUi();
+      }
+    };
+    return peer;
+  }
+
+  async function flushIce() {
+    if (!peer?.remoteDescription) return;
+    const queued = pendingIce.splice(0);
+    for (const candidate of queued) await peer.addIceCandidate(candidate).catch(() => {});
+  }
+
+  function syncCallUi() {
+    if (!root) return;
+    const stage = root.querySelector("[data-rt-call-stage]");
+    if (stage) stage.classList.toggle("active", callState.status !== "idle");
+    const remoteVideo = root.querySelector("[data-rt-remote-video]");
+    const localVideo = root.querySelector("[data-rt-local-video]");
+    if (remoteVideo && remoteVideo.srcObject !== remoteStream) remoteVideo.srcObject = remoteStream;
+    if (localVideo && localVideo.srcObject !== localStream) localVideo.srcObject = localStream;
+    root.querySelectorAll("[data-rt-call-status]").forEach((node) => {
+      node.textContent = callState.status === "outgoing" ? "Calling…" : callState.status === "ringing" ? "Incoming call" : callState.status === "active" ? "Live call" : "Text only";
+    });
+    const mic = root.querySelector("[data-rt-mic]");
+    const camera = root.querySelector("[data-rt-camera]");
+    if (mic) { mic.textContent = callState.microphone ? "Mute" : "Turn mic on"; mic.classList.toggle("off", !callState.microphone); }
+    if (camera) { camera.textContent = callState.camera ? "Camera off" : "Camera on"; camera.classList.toggle("off", !callState.camera); }
+    root.querySelector("[data-rt-audio-only]")?.classList.toggle("hidden", Boolean(remoteStream?.getVideoTracks().length));
+  }
+
+  function openGuestCreditNotice() {
+    modal(`<span class="rt-eyebrow">Guest credits are temporary</span><h3>Create an account to buy credits</h3><p class="rt-muted">Purchases need a registered account so credits and payment history can be recovered safely. Your current guest match will end only if you choose to continue.</p><div class="rt-actions"><button class="rt-button primary" data-rt-auth="register" type="button">Register</button><button class="rt-button" data-rt-auth="login" type="button">Log In</button><button class="rt-button" data-rt-modal-close type="button">Keep chatting</button></div>`).querySelectorAll("[data-rt-auth]").forEach((button) => button.addEventListener("click", () => bridge().openAuth?.(button.dataset.rtAuth)));
+  }
+
+  function openCallConsent(mode) {
+    const label = mode === "video" ? "video" : "voice";
+    const layer = modal(`<span class="rt-eyebrow">Optional ${label} call</span><h3>Start a ${label} call?</h3><p class="rt-muted">The stranger must accept. ${mode === "video" ? "You will see your own preview before the request is sent. " : ""}Nothing is recorded. You can turn devices off or hang up at any time.</p><label class="rt-confirm"><input data-rt-data-saver type="checkbox" ${localStorage.getItem("tct_rt_data_saver") !== "0" ? "checked" : ""} /> Data Saver (lower-resolution video)</label><div class="rt-error hidden" data-rt-error></div><div class="rt-actions"><button class="rt-button primary" data-rt-call-confirm type="button">Enable ${mode === "video" ? "camera and microphone" : "microphone"}</button><button class="rt-button" data-rt-modal-close type="button">Cancel</button></div>`);
+    layer.querySelector("[data-rt-data-saver]")?.addEventListener("change", (event) => localStorage.setItem("tct_rt_data_saver", event.currentTarget.checked ? "1" : "0"));
+    layer.querySelector("[data-rt-call-confirm]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await acquireMedia(mode);
+        callState.status = "outgoing";
+        callState.incoming = false;
+        bridge().emit("random-talk-call-signal", { kind: "request", mode });
+        layer.classList.add("hidden");
+        syncCallUi();
+      } catch (error) {
+        const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); event.currentTarget.disabled = false;
+      }
+    });
+  }
+
+  function openIncomingCall(mode) {
+    const layer = modal(`<span class="rt-eyebrow">Incoming ${esc(mode)} call</span><h3>The stranger wants to call</h3><p class="rt-muted">Nothing turns on until you accept. Calls are live and not recorded.</p><div class="rt-error hidden" data-rt-error></div><div class="rt-actions"><button class="rt-button primary" data-rt-accept-call type="button">Accept ${esc(mode)} call</button><button class="rt-button danger" data-rt-decline-call type="button">Decline</button></div>`);
+    layer.querySelector("[data-rt-decline-call]").addEventListener("click", () => { bridge().emit("random-talk-call-signal", { kind: "decline", reason: "declined" }); callState = { ...callState, status: "idle", incoming: false }; layer.classList.add("hidden"); syncCallUi(); });
+    layer.querySelector("[data-rt-accept-call]").addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await acquireMedia(mode);
+        callState.status = "active";
+        callState.incoming = true;
+        await createPeer();
+        bridge().emit("random-talk-call-signal", { kind: "accept", mode });
+        layer.classList.add("hidden");
+        syncCallUi();
+      } catch (error) {
+        const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); event.currentTarget.disabled = false;
+      }
+    });
+  }
+
+  async function toggleMicrophone() {
+    const existing = localStream?.getAudioTracks()[0];
+    if (existing) {
+      existing.stop();
+      localStream.removeTrack(existing);
+      const sender = peer?.getSenders().find((item) => item.track?.kind === "audio");
+      await sender?.replaceTrack(null);
+      callState.microphone = false;
+    } else {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: mediaConstraints("voice").audio, video: false });
+      const track = stream.getAudioTracks()[0];
+      if (!localStream) localStream = new MediaStream();
+      localStream.addTrack(track);
+      const sender = peer?.getSenders().find((item) => item.track?.kind === "audio" || !item.track);
+      if (sender) await sender.replaceTrack(track); else peer?.addTrack(track, localStream);
+      callState.microphone = true;
+    }
+    bridge().emit("random-talk-call-signal", { kind: "media-state", microphone: callState.microphone, camera: callState.camera });
+    syncCallUi();
+  }
+
+  async function toggleCamera() {
+    const existing = localStream?.getVideoTracks()[0];
+    if (existing) {
+      existing.stop(); localStream.removeTrack(existing);
+      const sender = peer?.getSenders().find((item) => item.track?.kind === "video");
+      await sender?.replaceTrack(null); callState.camera = false;
+    } else {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: mediaConstraints("video").video });
+      const track = stream.getVideoTracks()[0];
+      if (!localStream) localStream = new MediaStream();
+      localStream.addTrack(track);
+      const sender = peer?.getSenders().find((item) => item.track?.kind === "video");
+      if (sender) await sender.replaceTrack(track); else peer?.addTrack(track, localStream);
+      callState.camera = true; callState.mode = "video";
+    }
+    bridge().emit("random-talk-call-signal", { kind: "media-state", microphone: callState.microphone, camera: callState.camera });
+    syncCallUi();
+  }
+
+  async function switchCamera() {
+    if (!callState.camera) return;
+    const nextFacing = callState.facingMode === "user" ? "environment" : "user";
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: mediaConstraints("video", nextFacing).video });
+    const next = stream.getVideoTracks()[0];
+    const old = localStream.getVideoTracks()[0];
+    const sender = peer?.getSenders().find((item) => item.track?.kind === "video");
+    await sender?.replaceTrack(next);
+    old?.stop(); if (old) localStream.removeTrack(old); localStream.addTrack(next);
+    callState.facingMode = nextFacing; syncCallUi();
+  }
+
   function renderMatched() {
     clearInterval(searchingTicker);
     const partner = current.partner || {};
-    root.innerHTML = shell(`<div class="rt-chat"><div class="rt-chat-head"><div class="rt-stranger"><b class="rt-anon-avatar">?</b><span><strong>${esc(partner.temporaryUsername || "Stranger")}</strong><small>You’re now talking to a random stranger.</small></span></div><div class="rt-actions"><span class="rt-status-badge ${partner.connected === false ? "offline" : ""}">${partner.connected === false ? "Reconnecting" : "Online"}</span>${partner.interest ? `<span class="rt-interest-badge">${esc(partner.interest)}</span>` : ""}</div></div><div class="rt-message-area" data-rt-messages></div><div><div class="rt-typing" data-rt-typing></div><form class="rt-composer" data-rt-composer><button class="rt-button danger" data-rt-skip type="button">Skip</button><input name="body" maxlength="500" placeholder="Message your stranger…" autocomplete="off" /><button class="rt-button primary" type="submit">Send</button></form></div></div>`, partner.temporaryUsername ? `Connected with ${partner.temporaryUsername}` : "Connected with a stranger");
-    bindShell(); paintMessages(); bindChat();
+    root.innerHTML = shell(`<div class="rt-chat"><div class="rt-chat-head"><div class="rt-stranger"><b class="rt-anon-avatar">?</b><span><strong>${esc(partner.temporaryUsername || "Stranger")}</strong><small><i class="rt-guest-badge">${partner.guest ? "Guest" : "Anonymous"}</i> <span data-rt-duration>00:00</span> · <span data-rt-call-status>Text only</span></small></span></div><div class="rt-actions"><span class="rt-status-badge ${partner.connected === false ? "offline" : ""}">${partner.connected === false ? "Reconnecting" : "Online"}</span>${partner.interest ? `<span class="rt-interest-badge">${esc(partner.interest)}</span>` : ""}<button class="rt-button" data-rt-call="voice" type="button">Voice</button><button class="rt-button" data-rt-call="video" type="button">Video</button></div></div><div class="rt-conversation-grid"><section class="rt-call-stage ${callState.status !== "idle" ? "active" : ""}" data-rt-call-stage><video data-rt-remote-video autoplay playsinline></video><div class="rt-audio-only" data-rt-audio-only><b>?</b><span>Voice call with ${esc(partner.temporaryUsername || "Stranger")}</span></div><video class="rt-local-video" data-rt-local-video autoplay playsinline muted></video><div class="rt-call-quality"><i></i><span data-rt-call-status>Live call</span></div><div class="rt-call-controls"><button data-rt-mic type="button">Mute</button><button data-rt-camera type="button">Camera off</button><button data-rt-switch-camera type="button">Switch camera</button><button class="danger" data-rt-hangup type="button">Hang up</button></div></section><section class="rt-text-panel"><div class="rt-message-area" data-rt-messages></div><div><div class="rt-typing" data-rt-typing></div><form class="rt-composer" data-rt-composer><button class="rt-button danger" data-rt-skip type="button">Skip</button><input name="body" maxlength="500" placeholder="Message your stranger…" autocomplete="off" /><button class="rt-button primary" type="submit">Send</button></form></div></section></div></div>`, partner.temporaryUsername ? `Connected with ${partner.temporaryUsername}` : "Connected with a stranger");
+    bindShell(); paintMessages(); bindChat(); syncCallUi(); startDurationTicker();
+  }
+
+  function startDurationTicker() {
+    clearInterval(durationTicker);
+    const paint = () => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - new Date(current.connectedAt || Date.now()).getTime()) / 1000));
+      const value = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+      root?.querySelectorAll("[data-rt-duration]").forEach((node) => { node.textContent = value; });
+    };
+    paint(); durationTicker = setInterval(paint, 1000);
   }
 
   function bindChat() {
-    root.querySelector("[data-rt-skip]")?.addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { current = await post("/skip"); renderCurrent(); } catch (error) { setError(error.message); event.currentTarget.disabled = false; } });
+    root.querySelector("[data-rt-skip]")?.addEventListener("click", async (event) => { event.currentTarget.disabled = true; endCall({ notify: true, reason: "skipped" }); try { current = await post("/skip"); renderCurrent(); } catch (error) { setError(error.message); event.currentTarget.disabled = false; } });
+    root.querySelectorAll("[data-rt-call]").forEach((button) => button.addEventListener("click", () => {
+      if (callState.status !== "idle") return setError("End the current call before starting another one.");
+      openCallConsent(button.dataset.rtCall);
+    }));
+    root.querySelector("[data-rt-mic]")?.addEventListener("click", () => toggleMicrophone().catch((error) => setError(mediaErrorMessage(error, "voice"))));
+    root.querySelector("[data-rt-camera]")?.addEventListener("click", () => toggleCamera().catch((error) => setError(mediaErrorMessage(error, "video"))));
+    root.querySelector("[data-rt-switch-camera]")?.addEventListener("click", () => switchCamera().catch((error) => setError(mediaErrorMessage(error, "video"))));
+    root.querySelector("[data-rt-hangup]")?.addEventListener("click", () => endCall({ notify: true, reason: "hangup" }));
     const form = root.querySelector("[data-rt-composer]");
     form?.addEventListener("submit", async (event) => {
       event.preventDefault(); const input = event.currentTarget.body; const body = input.value.trim(); if (!body) return;
@@ -127,15 +375,16 @@
   function modal(content) { const layer = root.querySelector("[data-rt-modal]"); layer.innerHTML = `<section class="rt-modal-card">${content}</section>`; layer.classList.remove("hidden"); layer.querySelector("[data-rt-modal-close]")?.addEventListener("click", () => layer.classList.add("hidden")); return layer; }
   function openReport() {
     const layer = modal(`<h3>Report this stranger</h3><p class="rt-muted">A short recent message excerpt is saved for authorised staff review. The stranger is not told who reported them.</p><form data-rt-report-form><label class="rt-field">Category<select name="category">${reportCategories.map((category) => `<option>${esc(category)}</option>`).join("")}</select></label><label class="rt-field">Details<textarea name="details" maxlength="500" placeholder="Briefly explain what happened"></textarea></label><div class="rt-error hidden" data-rt-error></div><div class="rt-actions"><button class="rt-button primary" type="submit">Report and Skip</button><button class="rt-button" data-rt-modal-close type="button">Cancel</button></div></form>`);
-    layer.querySelector("form").addEventListener("submit", async (event) => { event.preventDefault(); const submit = event.currentTarget.querySelector("button[type='submit']"); submit.disabled = true; try { await post("/report", { ...Object.fromEntries(new FormData(event.currentTarget)), skip: true }); layer.classList.add("hidden"); } catch (error) { const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); submit.disabled = false; } });
+    layer.querySelector("form").addEventListener("submit", async (event) => { event.preventDefault(); const submit = event.currentTarget.querySelector("button[type='submit']"); submit.disabled = true; try { endCall({ notify: true, reason: "reported" }); await post("/report", { ...Object.fromEntries(new FormData(event.currentTarget)), skip: true }); layer.classList.add("hidden"); } catch (error) { const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); submit.disabled = false; } });
   }
   function openBlockConfirm() {
     const layer = modal(`<h3>Block this stranger?</h3><p class="rt-muted">The conversation will end and your accounts will not be matched again. They will not be told who blocked them.</p><div class="rt-error hidden" data-rt-error></div><div class="rt-actions"><button class="rt-button danger" data-rt-confirm-block type="button">Block stranger</button><button class="rt-button" data-rt-modal-close type="button">Cancel</button></div>`);
-    layer.querySelector("[data-rt-confirm-block]").addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { await post("/block"); current = await api("/status"); renderCurrent(); } catch (error) { const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); event.currentTarget.disabled = false; } });
+    layer.querySelector("[data-rt-confirm-block]").addEventListener("click", async (event) => { event.currentTarget.disabled = true; try { endCall({ notify: true, reason: "blocked" }); await post("/block"); current = await api("/status"); renderCurrent(); } catch (error) { const area = layer.querySelector("[data-rt-error]"); area.textContent = error.message; area.classList.remove("hidden"); event.currentTarget.disabled = false; } });
   }
 
   function renderCurrent() {
     if (!openState || !root) return;
+    if (current.status !== "matched" && callState.status !== "idle") endCall({ notify: false });
     if (current.status === "setup") return renderSetup();
     if (current.status === "idle") return renderIdle();
     if (current.status === "queued") return renderQueued();
@@ -154,9 +403,66 @@
 
   async function close() {
     if (!openState) return;
-    openState = false; clearInterval(searchingTicker); clearTimeout(typingOffTimer);
+    openState = false; clearInterval(searchingTicker); clearInterval(durationTicker); clearTimeout(typingOffTimer);
+    endCall({ notify: true, reason: "left" });
     await post("/leave").catch(() => {});
     root?.remove(); root = null; document.body.classList.remove("random-talk-open");
+  }
+
+  async function handleCallSignal(payload = {}) {
+    const kind = payload.kind;
+    if (kind === "request") {
+      if (callState.status !== "idle") return bridge().emit("random-talk-call-signal", { kind: "decline", reason: "busy" });
+      callState = { ...callState, status: "ringing", incoming: true, mode: payload.mode || "voice" };
+      openIncomingCall(callState.mode);
+      syncCallUi();
+      return;
+    }
+    if (kind === "decline") {
+      endCall({ notify: false });
+      setError(payload.reason === "busy" ? "The stranger is already handling another call." : "The stranger declined the call. Text chat is still available.");
+      return;
+    }
+    if (kind === "accept") {
+      if (callState.status !== "outgoing") return;
+      callState.status = "active";
+      const connection = await createPeer();
+      const offer = await connection.createOffer();
+      await connection.setLocalDescription(offer);
+      bridge().emit("random-talk-call-signal", { kind: "offer", description: connection.localDescription.toJSON?.() || connection.localDescription });
+      syncCallUi();
+      return;
+    }
+    if (kind === "offer") {
+      if (callState.status !== "active") return;
+      const connection = await createPeer();
+      await connection.setRemoteDescription(payload.description);
+      await flushIce();
+      const answer = await connection.createAnswer();
+      await connection.setLocalDescription(answer);
+      bridge().emit("random-talk-call-signal", { kind: "answer", description: connection.localDescription.toJSON?.() || connection.localDescription });
+      return;
+    }
+    if (kind === "answer") {
+      if (!peer || callState.status !== "active") return;
+      await peer.setRemoteDescription(payload.description);
+      await flushIce();
+      return;
+    }
+    if (kind === "ice") {
+      if (!peer?.remoteDescription) pendingIce.push(payload.candidate);
+      else await peer.addIceCandidate(payload.candidate).catch(() => {});
+      return;
+    }
+    if (kind === "hangup") {
+      endCall({ notify: false });
+      if (openState) setError(payload.reason === "peer-disconnected" ? "The call ended because the stranger disconnected. Text will resume if they reconnect." : "The call ended. Text chat is still available.");
+      return;
+    }
+    if (kind === "media-state" && openState) {
+      const quality = root?.querySelector(".rt-call-quality span");
+      if (quality) quality.textContent = `${payload.microphone ? "Mic on" : "Mic off"} · ${payload.camera ? "Camera on" : "Camera off"}`;
+    }
   }
 
   function handleRealtime(type, payload) {
@@ -172,11 +478,14 @@
       return;
     }
     if (type === "typing" && openState) { const line = root?.querySelector("[data-rt-typing]"); if (line) line.textContent = payload.typing ? "Stranger is typing…" : ""; return; }
+    if (type === "call-signal") { handleCallSignal(payload).catch((error) => { endCall({ notify: false }); setError(error.message); }); return; }
+    if (type === "call-error") { if (openState) setError(payload.message); return; }
     if (type === "error") { if (openState) setError(payload.message); }
   }
 
   window.addEventListener("beforeunload", () => {
     if (!openState || !bridge().getState().token) return;
+    destroyPeer(); stopLocalMedia();
     fetch("/api/random-talk/leave", { method: "POST", headers: { Authorization: `Bearer ${bridge().getState().token}`, "Content-Type": "application/json" }, body: "{}", keepalive: true }).catch(() => {});
   });
 

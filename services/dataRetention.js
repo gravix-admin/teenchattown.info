@@ -60,6 +60,8 @@ async function cleanExpiredData() {
       [RANDOM_TALK_SESSION_RETENTION_DAYS]
     );
     await pool.query("DELETE FROM welcome_sessions WHERE started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 DAY)");
+    await pool.query("UPDATE guest_sessions SET revoked_at = COALESCE(revoked_at, UTC_TIMESTAMP()) WHERE expires_at < UTC_TIMESTAMP() AND revoked_at IS NULL");
+    await pool.query("DELETE FROM random_talk_blocks WHERE expires_at IS NOT NULL AND expires_at < UTC_TIMESTAMP()");
   } catch (error) {
     console.error("[retention] cleanup failed:", error.message);
   } finally {

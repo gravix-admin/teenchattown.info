@@ -108,15 +108,22 @@ router.get("/dashboard", async (req, res) => {
      ORDER BY r.created_at DESC LIMIT 30`
   );
   const [randomTalkReports] = await pool.query(
-    `SELECT r.id, r.reporter_user_id, r.reported_user_id, r.category, r.details, r.status,
-            r.internal_notes, r.created_at, reporter.username AS reporter_name,
-            reported.username AS reported_name,
+    `SELECT r.id, r.reporter_user_id, r.reported_user_id, r.reported_guest_id, r.category, r.details, r.status,
+            r.internal_notes, r.created_at,
+            COALESCE(reporter.username, CONCAT(reporter_guest.display_name, ' (Guest)')) AS reporter_name,
+            COALESCE(reported.username, CONCAT(reported_guest.display_name, ' (Guest)')) AS reported_name,
+            IF(active_ban.id IS NULL, 0, 1) AS network_banned,
             (SELECT COUNT(*) FROM random_talk_reports prior
-             WHERE prior.reported_user_id = r.reported_user_id AND prior.id <> r.id) AS previous_offence_count
+             WHERE ((r.reported_user_id IS NOT NULL AND prior.reported_user_id = r.reported_user_id)
+                OR (r.reported_guest_id IS NOT NULL AND prior.reported_guest_id = r.reported_guest_id))
+               AND prior.id <> r.id) AS previous_offence_count
      FROM random_talk_reports r
-     JOIN users reporter ON reporter.id = r.reporter_user_id
-     JOIN users reported ON reported.id = r.reported_user_id
-     WHERE reporter.rank_name <> 'developer' AND reported.rank_name <> 'developer'
+     LEFT JOIN users reporter ON reporter.id = r.reporter_user_id
+     LEFT JOIN users reported ON reported.id = r.reported_user_id
+     LEFT JOIN guest_sessions reporter_guest ON reporter_guest.id = r.reporter_guest_id
+     LEFT JOIN guest_sessions reported_guest ON reported_guest.id = r.reported_guest_id
+     LEFT JOIN guest_network_bans active_ban ON active_ban.ip_hash = COALESCE(reported_guest.ip_hash, '') AND active_ban.revoked_at IS NULL AND (active_ban.expires_at IS NULL OR active_ban.expires_at > UTC_TIMESTAMP())
+     WHERE COALESCE(reporter.rank_name, '') <> 'developer' AND COALESCE(reported.rank_name, '') <> 'developer'
      ORDER BY FIELD(r.status, 'open', 'reviewing', 'resolved', 'dismissed'), r.created_at DESC
      LIMIT 30`
   );

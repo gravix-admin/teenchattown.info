@@ -6,7 +6,7 @@
     <title>TeenChatTown — Live rooms, real friends</title>
     <meta name="description" content="TeenChatTown is a modern real-time community with live rooms, expressive profiles, a friends wall, private messages, and protected staff spaces." />
     <script>try{if(localStorage.getItem("tct_token"))document.documentElement.classList.add("returning-user")}catch(_error){}</script>
-  <link rel="stylesheet" href="/styles.css?v=20260715-arc-chat-v3" />
+  <link rel="stylesheet" href="/styles.css?v=20260719-random-v2" />
   <link rel="stylesheet" href="/sus-game.css?v=20260715-sus-v1" />
   </head>
   <body>
@@ -14,9 +14,9 @@
       <div class="auth-hero">
         <div class="brand"><span>TT</span><strong>Teens Town Chat</strong></div>
         <div class="auth-copy">
-          <span class="eyebrow">Your people are already here</span>
-          <h1>Chat loud. Belong instantly.</h1>
-          <p>Drop into live rooms, build a profile that feels like you, and keep up with friends without the clutter.</p>
+          <span class="eyebrow">TeenChatTown · live and welcoming</span>
+          <h1>Talk to Someone New</h1>
+          <p>Join live rooms with an account, or start a private one-to-one text, voice, or video conversation with a random stranger.</p>
         </div>
         <div class="auth-highlights">
           <span>Live rooms</span>
@@ -27,8 +27,8 @@
       </div>
       <div class="auth-card">
         <div class="auth-card-heading">
-          <span class="eyebrow">New here?</span>
-          <h2>Step into town</h2>
+          <span class="eyebrow">Choose how to enter</span>
+          <h2>Welcome to town</h2>
         </div>
         <div class="auth-tabs">
           <button class="active" data-auth-tab="login" type="button">Login</button>
@@ -60,6 +60,21 @@
           </div>
           <button class="primary" type="submit">Register</button>
         </form>
+        <div class="auth-guest-divider"><span>or use temporary access</span></div>
+        <button class="guest-entry-button" data-auth-tab="guest" type="button"><span>Continue as Guest</span><small>Random Talk only · no account required</small></button>
+        <form class="auth-form guest-auth-form" id="guestForm">
+          <span class="eyebrow">Guest Stranger Talk</span>
+          <h3>Start with text only</h3>
+          <p>Choose a temporary display name. Camera and microphone stay off unless you intentionally enable a call after matching.</p>
+          <input name="displayName" placeholder="Temporary display name" minlength="3" maxlength="18" autocomplete="nickname" required />
+          <label class="field-label">Age group
+            <select name="ageBand" required><option value="">Choose age group</option><option value="minor">13–17</option><option value="adult">18+</option></select>
+          </label>
+          <label class="guest-terms"><input name="terms" type="checkbox" required /> I am at least 13 and agree to the Community Rules and Stranger Talk safety notice.</label>
+          <button class="primary" type="submit">Enter Guest Stranger Talk</button>
+          <button class="auth-back-button" data-auth-tab="login" type="button">Back to Log In</button>
+          <small class="guest-access-note">Guest access is temporary and limited to Random Talk. Create an account to unlock the full community and buy credits.</small>
+        </form>
         <p class="auth-note">For ages 13+. Be kind, protect private info, and use reports when something feels off.</p>
         <p id="authMessage"></p>
       </div>
@@ -88,6 +103,7 @@
           <button data-view="leaderboard" title="Leaderboard" aria-label="Leaderboard" type="button"><span class="nav-mark">L</span><span>Leaderboard</span></button>
           <button data-view="games" title="Games" aria-label="Games" type="button"><span class="nav-mark">G</span><span>Games</span></button>
           <button data-view="chatStore" title="Chat Store" aria-label="Chat Store" type="button"><span class="nav-mark">S</span><span>Chat Store</span></button>
+          <button data-view="store" title="Store and credits" aria-label="Store and credits" type="button"><span class="nav-mark">C</span><span>Store</span></button>
           <p class="nav-kicker">Community</p>
           <button data-view="rules" title="Rules" aria-label="Rules" type="button"><span class="nav-mark">!</span><span>Rules</span></button>
           <button data-view="commands" title="Commands" aria-label="Commands" type="button"><span class="nav-mark">/</span><span>Commands</span></button>
@@ -143,6 +159,7 @@
         <section class="view" id="leaderboardView"><div class="panel"><div class="view-head"><h2>Leaderboard</h2><button data-close-view type="button">Close</button></div><div id="leaderboard"></div></div></section>
         <section class="view" id="gamesView"><div class="panel games-panel"><div class="view-head"><div><span class="eyebrow">Town Arcade</span><h2>Games</h2></div><button data-close-view type="button">Close</button></div><div id="gamesHub"><div class="view-loading"><span></span><strong>Opening games...</strong></div></div></div></section>
         <section class="view" id="chatStoreView"><div class="panel store-panel"><div class="view-head"><div><h2>Chat Store</h2><small class="store-free-note">Free for Premium</small></div><button data-close-view type="button">Close</button></div><div id="chatStore"><div class="store-loading">Opening store...</div></div></div></section>
+        <section class="view" id="storeView"><div class="panel credit-store-panel"><div class="view-head"><div><span class="eyebrow">Credits and membership</span><h2>TeenChatTown Store</h2></div><button data-close-view type="button">Close</button></div><div id="creditStore"><div class="store-loading">Opening secure store...</div></div></div></section>
         <section class="view" id="rulesView"><div class="panel policy-panel"><div class="view-head"><h2>TeenChatTown Chat Rules</h2><button data-close-view type="button">Close</button></div><p class="policy-intro">TeenChatTown is a community for respectful, safe, and enjoyable conversations. By using the platform, you agree to follow these rules.</p><div class="rules-list">
           <article><span>1</span><div><h3>Respect Everyone</h3><p>Treat all users with respect. Harassment, bullying, personal attacks, threats, discrimination, or hate speech are not allowed.</p></div></article>
           <article><span>2</span><div><h3>Keep the Chat Appropriate</h3><p>Do not post sexual, graphic, violent, or disturbing content. Any sexual content involving minors will result in an immediate permanent ban and may be reported.</p></div></article>
@@ -334,7 +351,7 @@
     </dialog>
 
     <script src="/socket.io/socket.io.js"></script>
-  <script src="/script.js?v=20260715-arc-chat-v3"></script>
+  <script src="/script.js?v=20260719-random-v2"></script>
   <script src="/sus-game-tasks.js?v=20260715-sus-v1"></script>
   <script src="/sus-game.js?v=20260715-sus-v1"></script>
   </body>

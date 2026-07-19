@@ -35,6 +35,9 @@ const persistedLeaderboards = readLocalCache("tct_leaderboard_cache_v2");
 
 const state = {
   token: localStorage.getItem("tct_token") || "",
+  guestToken: localStorage.getItem("tct_guest_token") || "",
+  isGuest: false,
+  guest: null,
   me: null,
   rooms: [],
   users: [],
@@ -472,6 +475,41 @@ function setView(view) {
   if (view === "leaderboard") renderLeaderboard().catch((error) => toast(error.message));
   if (view === "games" && !state.activeXoGameId && !window.SusGame?.isOpen?.()) renderGames().catch((error) => toast(error.message));
   if (view === "chatStore") renderChatStore().catch((error) => toast(error.message));
+  if (view === "store") renderCreditStore().catch((error) => toast(error.message));
+}
+
+function productPrice(product) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: product.currency || "USD" }).format(Number(product.amountMinor || 0) / 100);
+  } catch (_error) {
+    return `${product.currency || "USD"} ${(Number(product.amountMinor || 0) / 100).toFixed(2)}`;
+  }
+}
+
+async function renderCreditStore() {
+  const root = $("#creditStore");
+  if (!root) return;
+  const data = await api("/api/store/products", { cache: "no-store" });
+  const credits = data.products.filter((item) => item.type === "credits");
+  const memberships = data.products.filter((item) => item.type !== "credits");
+  const card = (product) => `<article class="credit-product-card" data-store-product="${html(product.code)}"><span class="credit-product-type">${html(product.type.replaceAll("_", " "))}</span><h3>${html(product.name)}</h3><p>${html(product.description)}</p><strong>${html(productPrice(product))}</strong>${product.credits ? `<small>${compactNumber(product.credits)} Random Talk credits</small>` : ""}<button class="primary" data-contact-product="${html(product.code)}" type="button">Buy · Contact Support</button></article>`;
+  root.innerHTML = `<section class="credit-wallet-banner"><div><span>Random Talk balance</span><strong data-store-credit-balance>Loading…</strong></div><p>Matches cost 60 credits plus 20 credits for every started minute. A new match needs at least 80 credits.</p></section><div class="store-section-heading"><h3>Credits</h3><span>Account-bound · non-transferable</span></div><div class="credit-product-grid">${credits.map(card).join("")}</div><div class="store-section-heading"><h3>Membership and limited roles</h3><span>All ranks remain subject to moderation</span></div><div class="credit-product-grid">${memberships.map(card).join("")}</div><section class="store-contact-card"><span>Payment procedure</span><h3>Call or WhatsApp ${html(data.support.phoneDisplay)}</h3><p>Contact support to begin payment. Products are added only after payment is verified; clicking a contact button does not mark a payment as successful.</p><a href="${html(data.support.telephoneUrl)}">Call support</a></section><p class="store-terms-line">Virtual items have no cash-out value, are account-bound, and cannot be transferred. Purchases do not grant immunity from community rules or moderation.</p>`;
+  api("/api/store/wallet", { cache: "no-store" }).then((wallet) => {
+    const node = root.querySelector("[data-store-credit-balance]");
+    if (node) node.textContent = `${compactNumber(wallet.creditBalance)} credits`;
+  }).catch(() => {});
+  root.querySelectorAll("[data-contact-product]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const contact = await api("/api/store/contact", { method: "POST", body: JSON.stringify({ productCode: button.dataset.contactProduct }) });
+      const layer = document.createElement("div");
+      layer.className = "store-contact-modal";
+      layer.innerHTML = `<section><button data-close-contact type="button" aria-label="Close">×</button><span class="eyebrow">Contact support</span><h3>${html(contact.phoneDisplay)}</h3><p>${html(contact.notice)}</p><div><a href="${html(contact.whatsappUrl)}" target="_blank" rel="noopener">Open WhatsApp</a><a href="${html(contact.telephoneUrl)}">Call now</a></div></section>`;
+      document.body.append(layer);
+      layer.addEventListener("click", (event) => { if (event.target === layer || event.target.closest("[data-close-contact]")) layer.remove(); });
+    } catch (error) { toast(error.message); }
+    finally { button.disabled = false; }
+  }));
 }
 
 function setBadges() {
@@ -892,6 +930,72 @@ function renderRooms() {
   renderRoomGrid();
 }
 
+function guestDeviceId() {
+  let value = localStorage.getItem("tct_guest_device_id") || "";
+  if (!/^[a-z0-9-]{16,80}$/i.test(value)) {
+    value = crypto.randomUUID();
+    localStorage.setItem("tct_guest_device_id", value);
+  }
+  return value;
+}
+
+function selectAuthTab(tab) {
+  $$('[data-auth-tab]').forEach((node) => node.classList.toggle("active", node.dataset.authTab === tab));
+  $$(".auth-form").forEach((form) => form.classList.remove("active"));
+  $(`#${tab}Form`)?.classList.add("active");
+  $("#authMessage").textContent = "";
+}
+
+async function startGuestAccess(payload) {
+  const data = await api("/api/auth/guest", { method: "POST", body: JSON.stringify({ ...payload, deviceId: guestDeviceId() }) });
+  state.guestToken = data.token;
+  state.token = data.token;
+  state.guest = data.guest;
+  state.isGuest = true;
+  localStorage.setItem("tct_guest_token", data.token);
+  state.preferEventSource = false;
+  connectEvents();
+  const feature = await loadRandomTalk();
+  await feature.open();
+}
+
+async function leaveGuestForAuth(tab = "register") {
+  await window.RandomTalk?.close?.();
+  await api("/api/auth/guest/logout", { method: "POST", body: "{}" }).catch(() => {});
+  state.socket?.disconnect();
+  state.socket = null;
+  state.eventSource?.close();
+  state.eventSource = null;
+  state.token = "";
+  state.guestToken = "";
+  state.guest = null;
+  state.isGuest = false;
+  localStorage.removeItem("tct_guest_token");
+  setSessionView("anonymous");
+  selectAuthTab(tab);
+  requestAnimationFrame(() => $(`#${tab}Form input`)?.focus());
+}
+
+async function resumeGuestAccess() {
+  state.token = state.guestToken;
+  state.isGuest = true;
+  state.preferEventSource = false;
+  try {
+    await api("/api/random-talk/status", { cache: "no-store" });
+    connectEvents();
+    const feature = await loadRandomTalk();
+    await feature.open();
+  } catch (_error) {
+    state.token = "";
+    state.guestToken = "";
+    state.isGuest = false;
+    localStorage.removeItem("tct_guest_token");
+    setSessionView("anonymous");
+    selectAuthTab("guest");
+    $("#authMessage").textContent = "Your previous guest session expired. Start a new guest session or create an account.";
+  }
+}
+
 let randomTalkLoadPromise = null;
 function loadRandomTalk() {
   if (window.RandomTalk) return Promise.resolve(window.RandomTalk);
@@ -900,11 +1004,11 @@ function loadRandomTalk() {
     let link = document.querySelector('link[data-random-talk-style]');
     if (link) return resolve();
     link = document.createElement("link");
-    link.rel = "stylesheet"; link.href = "/random-talk.css?v=20260715-random-v1"; link.dataset.randomTalkStyle = "1";
+    link.rel = "stylesheet"; link.href = "/random-talk.css?v=20260719-random-v2"; link.dataset.randomTalkStyle = "1";
     link.addEventListener("load", resolve, { once: true }); link.addEventListener("error", resolve, { once: true });
     document.head.appendChild(link);
   });
-  randomTalkLoadPromise = Promise.all([cssReady, import("/random-talk.js?v=20260715-random-v1")])
+  randomTalkLoadPromise = Promise.all([cssReady, import("/random-talk.js?v=20260719-random-v2")])
     .then(() => window.RandomTalk)
     .catch((error) => { randomTalkLoadPromise = null; throw error; });
   return randomTalkLoadPromise;
@@ -3866,7 +3970,7 @@ async function renderAdmin() {
         <span><strong>${html(report.category)}</strong><small>By ${html(report.reporter_name)} about ${html(report.reported_name)} · ${Number(report.previous_offence_count || 0)} previous reports</small></span>
         <p>${html(report.details || "No additional details")}</p>
         <input data-random-report-notes="${report.id}" maxlength="1000" value="${html(report.internal_notes || "")}" placeholder="Internal staff note" />
-        <div class="report-queue-actions"><select data-random-report-status="${report.id}">${["open", "reviewing", "resolved", "dismissed"].map((status) => `<option value="${status}" ${status === report.status ? "selected" : ""}>${status}</option>`).join("")}</select><button data-random-report-context="${report.id}" type="button">View context</button><button class="danger-action" data-random-restrict="${report.reported_user_id}" type="button">Restrict access</button></div>
+        <div class="report-queue-actions"><select data-random-report-status="${report.id}">${["open", "reviewing", "resolved", "dismissed"].map((status) => `<option value="${status}" ${status === report.status ? "selected" : ""}>${status}</option>`).join("")}</select><button data-random-report-context="${report.id}" type="button">View context</button>${report.reported_user_id ? `<button class="danger-action" data-random-restrict="${report.reported_user_id}" type="button">Restrict access</button>` : ""}<button class="danger-action" data-random-network-ban="${report.id}" type="button" ${Number(report.network_banned) ? "disabled" : ""}>${Number(report.network_banned) ? "Network banned" : "Ban guest network"}</button></div>
       </div>`).join("") || '<p class="muted">No Random Talk reports yet.</p>'}</div></section>
     <section class="panel admin-panel"><h2>Private chats</h2><div class="admin-table">${(data.privateConversations || []).map((chat) => `
       <div class="admin-private-row">
@@ -3939,6 +4043,15 @@ async function renderAdmin() {
     if (reason === null) return;
     await api(`/api/random-talk/admin/restrict/${button.dataset.randomRestrict}`, { method: "POST", body: JSON.stringify({ minutes, reason }) });
     toast("Random Talk access restricted.");
+  }));
+  $$("[data-random-network-ban]").forEach((button) => button.addEventListener("click", async () => {
+    const duration = prompt("Network ban duration in minutes. Enter 0 for permanent.", "10080");
+    if (duration === null || !/^\d+$/.test(duration.trim())) return;
+    const reason = prompt("Private audit reason", "Random Talk safety violation.");
+    if (reason === null || !reason.trim()) return;
+    await api(`/api/random-talk/admin/reports/${button.dataset.randomNetworkBan}/ban-network`, { method: "POST", body: JSON.stringify({ minutes: Number(duration), reason }) });
+    toast("Guest network access blocked.");
+    await renderAdmin();
   }));
   $$("[data-admin-delete-chat]").forEach((button) => button.addEventListener("click", async () => {
     const [userOneId, userTwoId] = button.dataset.adminDeleteChat.split(":");
@@ -4106,6 +4219,12 @@ const realtimeHandlers = {
   "random-talk-error"(data = {}) {
     window.RandomTalk?.handleRealtime?.("error", data);
   },
+  "random-talk-call-signal"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("call-signal", data);
+  },
+  "random-talk-call-error"(data = {}) {
+    window.RandomTalk?.handleRealtime?.("call-error", data);
+  },
   "message-updated"(data = {}) {
     const message = state.messages.find((item) => Number(item.id) === Number(data.id));
     if (message) message.body = data.body;
@@ -4166,6 +4285,7 @@ const realtimeHandlers = {
 };
 
 function connectEventSourceFallback() {
+  if (state.isGuest) return;
   if (state.eventSource) return;
   state.eventSource = new EventSource(`/api/chat/events?token=${encodeURIComponent(state.token)}`);
   state.eventSource.onopen = () => { state.eventRetryMs = 1500; };
@@ -4216,6 +4336,11 @@ function connectEvents() {
       refreshVisibleData().catch(() => {});
     });
     state.socket.on("connect_error", (error) => {
+      if (state.isGuest) {
+        console.warn("Guest Random Talk connection failed:", error.message);
+        toast("Random Talk is reconnecting. You can search when the live connection returns.");
+        return;
+      }
       console.warn("Socket connection failed; using fallback event stream.", error.message);
       state.preferEventSource = true;
       clearInterval(state.presenceTimer);
@@ -4230,6 +4355,7 @@ function connectEvents() {
 
 async function refreshVisibleData({ force = false } = {}) {
   if (!state.token) return;
+  if (state.isGuest) return;
   if (!state.me) {
     await bootstrap();
     return;
@@ -4371,18 +4497,15 @@ function bindEvents() {
     }
   }));
 
-  $$("[data-auth-tab]").forEach((button) => button.addEventListener("click", () => {
-    $$("[data-auth-tab]").forEach((node) => node.classList.remove("active"));
-    button.classList.add("active");
-    $$(".auth-form").forEach((form) => form.classList.remove("active"));
-    $(`#${button.dataset.authTab}Form`).classList.add("active");
-  }));
+  $$("[data-auth-tab]").forEach((button) => button.addEventListener("click", () => selectAuthTab(button.dataset.authTab)));
 
   $("#loginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
       state.token = data.token;
+      state.isGuest = false;
+      localStorage.removeItem("tct_guest_token");
       localStorage.setItem("tct_token", state.token);
       setSessionView("pending");
       await bootstrap();
@@ -4404,11 +4527,29 @@ function bindEvents() {
       delete payload.dobYear;
       const data = await api("/api/auth/register", { method: "POST", body: JSON.stringify(payload) });
       state.token = data.token;
+      state.isGuest = false;
+      localStorage.removeItem("tct_guest_token");
       localStorage.setItem("tct_token", state.token);
       setSessionView("pending");
       await bootstrap();
     } catch (error) {
       $("#authMessage").textContent = error.message;
+    }
+  });
+
+  $("#guestForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.currentTarget.querySelector("button[type='submit']");
+    submit.disabled = true;
+    try {
+      const payload = Object.fromEntries(new FormData(event.currentTarget));
+      if (!payload.terms) throw new Error("Please accept the safety notice to continue.");
+      delete payload.terms;
+      await startGuestAccess(payload);
+    } catch (error) {
+      $("#authMessage").textContent = error.message;
+    } finally {
+      submit.disabled = false;
     }
   });
 
@@ -4792,6 +4933,9 @@ window.TCTRandomTalkBridge = {
   getState: () => state,
   socketConnected: () => Boolean(state.socket?.connected),
   emit: (event, payload) => state.socket?.connected && state.socket.emit(event, payload),
+  isGuest: () => state.isGuest,
+  openAuth: (tab) => leaveGuestForAuth(tab),
+  openStore: async () => { await window.RandomTalk?.close?.(); setView("store"); },
 };
 
 applyTheme(localStorage.getItem("tct_theme") || "dark");
@@ -4805,6 +4949,9 @@ if (state.token) {
       toast("Connection is waking up. Tap refresh if the room stays empty.");
     }
   });
+} else if (state.guestToken) {
+  setSessionView("anonymous");
+  resumeGuestAccess();
 } else {
   setSessionView("anonymous");
 }

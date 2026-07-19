@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const pool = require("../database");
 const { rankPower, isStaffRank } = require("../services/ranks");
 const { sessionIdForToken } = require("../services/welcomeSessionService");
+const { guestFromPayload } = require("../services/guestSessionService");
 
 const USER_CACHE_TTL_MS = 15000;
 const userCache = new Map();
@@ -34,11 +35,16 @@ function tokenFromRequest(req) {
 async function attachUser(req, _res, next) {
   const token = tokenFromRequest(req);
   req.user = null;
+  req.guest = null;
   req.authToken = token;
   req.authSessionId = token ? sessionIdForToken(token) : null;
   if (!token) return next();
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.kind === "guest") {
+      req.guest = await guestFromPayload(payload);
+      return next();
+    }
     req.user = cachedUser(payload.id, payload.v);
     if (!req.user) {
       const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [payload.id]);
@@ -53,6 +59,14 @@ async function attachUser(req, _res, next) {
     }
     req.user = null;
   }
+  next();
+}
+
+function requireRandomIdentity(req, res, next) {
+  if (req.authDatabaseError) return res.status(503).json({ error: "Database is reconnecting. Please try again in a moment." });
+  if (!req.user && !req.guest) return res.status(401).json({ error: "Login or guest access required.", code: "RANDOM_AUTH_REQUIRED" });
+  req.randomUser = req.user || req.guest;
+  if (req.user) return requireAuth(req, res, next);
   next();
 }
 
@@ -87,4 +101,4 @@ function isStaff(user) {
   return isStaffRank(user?.rank_name);
 }
 
-module.exports = { attachUser, requireAuth, canControl, isStaff, rankPower, invalidateUserCache, cacheUser };
+module.exports = { attachUser, requireAuth, requireRandomIdentity, canControl, isStaff, rankPower, invalidateUserCache, cacheUser };

@@ -9,6 +9,7 @@ const { imageUpload, fileToDataUrl } = require("../services/upload");
 const { calculateAge, publicUser, rankBadges } = require("../services/userService");
 const { broadcast } = require("../services/events");
 const { clientIp, countryFromHeaders, refreshUserLocation } = require("../services/geoLocation");
+const { createGuestSession, revokeGuest } = require("../services/guestSessionService");
 const { PURCHASABLE_RANKS } = require("../services/ranks");
 const { createAuthSession, claimWelcomeChoice, completeWelcomeChoice } = require("../services/welcomeSessionService");
 const { developerProfilesVisible } = require("../services/developerVisibilityService");
@@ -33,6 +34,27 @@ const permissionCache = new Map();
 const directoryCache = { rows: null, at: 0 };
 const DIRECTORY_CACHE_MS = 5000;
 const PERMISSION_CACHE_MS = 30000;
+
+router.post("/guest", async (req, res) => {
+  try {
+    const result = await createGuestSession({
+      displayName: req.body.displayName,
+      ageBand: req.body.ageBand,
+      deviceId: req.body.deviceId,
+      ipAddress: clientIp(req),
+    });
+    res.set("Cache-Control", "no-store");
+    return res.status(result.reused ? 200 : 201).json(result);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message || "Guest access could not be started.", code: error.code || "GUEST_ERROR" });
+  }
+});
+
+router.post("/guest/logout", async (req, res) => {
+  if (!req.guest) return res.json({ ok: true });
+  await revokeGuest(req.guest.guestSessionId);
+  return res.json({ ok: true });
+});
 
 function invalidatePermissionCache(rank = null) {
   if (rank) permissionCache.delete(String(rank));
@@ -111,6 +133,13 @@ router.post("/register", async (req, res) => {
   }
   refreshUserLocation(result.insertId, req).catch((error) => console.warn("Country detection failed:", error.message));
   const [rows] = await pool.query("SELECT * FROM users WHERE id = ?", [result.insertId]);
+  await pool.query("INSERT IGNORE INTO user_wallets (user_id, credit_balance) VALUES (?, 500)", [result.insertId]);
+  await pool.query(
+    `INSERT IGNORE INTO credit_transactions
+      (user_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, idempotency_key, metadata_json)
+     VALUES (?, 'welcome_grant', 500, 0, 500, 'registration', ?, ?, ?)`,
+    [result.insertId, String(result.insertId), `welcome:user:${result.insertId}`, JSON.stringify({ source: "registration" })]
+  );
   const token = sign(rows[0]);
   await createAuthSession(token, rows[0], { isNewRegistration: true }).catch((error) => console.warn("Welcome session creation failed:", error.message));
   res.status(201).json({ token });

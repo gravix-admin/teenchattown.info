@@ -49,6 +49,20 @@ async function claimWelcomeChoice(token, user) {
     await createAuthSession(token, user);
     claimResult = await claim();
     session = await read();
+  } else if (!claimResult.affectedRows && returnType(user, false) === "returning") {
+    const [reset] = await pool.query(
+      `UPDATE welcome_sessions
+       SET previous_last_seen = ?, welcome_type = 'returning', presented_at = NULL,
+           completed_at = NULL, action = NULL, started_at = UTC_TIMESTAMP()
+       WHERE id = ? AND user_id = ?
+         AND (completed_at IS NOT NULL OR presented_at IS NOT NULL)
+         AND COALESCE(completed_at, presented_at) < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? MINUTE)`,
+      [user.last_seen || null, id, user.id, RETURN_THRESHOLD_MINUTES]
+    );
+    if (reset.affectedRows) {
+      claimResult = await claim();
+      session = await read();
+    }
   }
   return {
     id: id.slice(0, 20),

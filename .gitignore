@@ -1,0 +1,9 @@
+.env
+node_modules/
+.npm-cache/
+uploads/*
+tmp/
+public/Screenshots/
+npm-debug.log*
+.DS_Store
+Thumbs.db

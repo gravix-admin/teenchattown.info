@@ -82,6 +82,20 @@ async function ensureIndex(table, indexName, columns) {
   await query(`ALTER TABLE \`${table}\` ADD KEY \`${indexName}\` (${columns})`);
 }
 
+async function ensureCompositeUniqueIndex(table, indexName, columns) {
+  const [indexes] = await pool.query(
+    `SELECT INDEX_NAME
+     FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND INDEX_NAME = ?
+     LIMIT 1`,
+    [table, indexName]
+  );
+  if (indexes.length) return;
+  await query(`ALTER TABLE \`${table}\` ADD UNIQUE KEY \`${indexName}\` (${columns})`);
+}
+
 function legacyUsername(id, value) {
   const suffix = `_${id}`;
   const base = String(value || "user").trim().replace(/[^a-zA-Z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "user";
@@ -596,8 +610,8 @@ async function initSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS random_talk_sessions (
       id VARCHAR(36) PRIMARY KEY,
-      user_a_id INT NOT NULL,
-      user_b_id INT NOT NULL,
+      user_a_id INT NULL,
+      user_b_id INT NULL,
       temp_username_a VARCHAR(18) NOT NULL,
       temp_username_b VARCHAR(18) NOT NULL,
       interest_a VARCHAR(20) NULL,
@@ -618,7 +632,7 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS random_talk_messages (
       id VARCHAR(36) PRIMARY KEY,
       session_id VARCHAR(36) NOT NULL,
-      sender_id INT NOT NULL,
+      sender_id INT NULL,
       message_text VARCHAR(600) NOT NULL,
       moderation_flag VARCHAR(80) NULL,
       client_message_id VARCHAR(64) NULL,
@@ -632,8 +646,11 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS random_talk_reports (
       id INT AUTO_INCREMENT PRIMARY KEY,
       session_id VARCHAR(36) NOT NULL,
-      reporter_user_id INT NOT NULL,
-      reported_user_id INT NOT NULL,
+      reporter_user_id INT NULL,
+      reported_user_id INT NULL,
+      reporter_guest_id INT NULL,
+      reported_guest_id INT NULL,
+      reporter_identity VARCHAR(64) NOT NULL,
       category VARCHAR(60) NOT NULL,
       details VARCHAR(500) DEFAULT '',
       context_json TEXT NULL,
@@ -643,8 +660,145 @@ async function initSchema() {
       reviewed_by INT NULL,
       reviewed_at DATETIME NULL,
       UNIQUE KEY random_talk_one_report (session_id, reporter_user_id),
+      UNIQUE KEY random_talk_identity_report (session_id, reporter_identity),
       KEY random_talk_report_status (status, created_at),
       KEY random_talk_report_target (reported_user_id, created_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS guest_sessions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      session_key VARCHAR(36) NOT NULL UNIQUE,
+      display_name VARCHAR(18) NOT NULL,
+      age_band ENUM('minor','adult') NOT NULL,
+      credit_balance INT NOT NULL DEFAULT 500,
+      device_hash CHAR(64) NOT NULL,
+      ip_hash CHAR(64) NOT NULL,
+      token_version INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      revoked_at DATETIME NULL,
+      restricted_until DATETIME NULL,
+      restriction_reason VARCHAR(255) DEFAULT '',
+      KEY guest_session_lookup (session_key, expires_at),
+      KEY guest_device_abuse (device_hash, ip_hash, created_at),
+      KEY guest_expiry (expires_at, revoked_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS guest_network_bans (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      ip_hash CHAR(64) NOT NULL,
+      reason VARCHAR(255) NOT NULL,
+      actor_user_id INT NOT NULL,
+      source_report_id INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NULL,
+      revoked_at DATETIME NULL,
+      KEY guest_ban_lookup (ip_hash, revoked_at, expires_at),
+      KEY guest_ban_report (source_report_id)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS random_talk_blocks (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      blocker_identity VARCHAR(64) NOT NULL,
+      blocked_identity VARCHAR(64) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NULL,
+      UNIQUE KEY random_talk_block_pair (blocker_identity, blocked_identity),
+      KEY random_talk_block_expiry (expires_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_wallets (
+      user_id INT PRIMARY KEY,
+      credit_balance INT NOT NULL DEFAULT 500,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY user_wallet_balance (credit_balance)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NULL,
+      guest_session_id INT NULL,
+      transaction_type VARCHAR(40) NOT NULL,
+      amount INT NOT NULL,
+      balance_before INT NOT NULL,
+      balance_after INT NOT NULL,
+      reference_type VARCHAR(40) NOT NULL,
+      reference_id VARCHAR(80) NOT NULL,
+      idempotency_key VARCHAR(160) NOT NULL UNIQUE,
+      metadata_json TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      KEY credit_user_history (user_id, created_at),
+      KEY credit_guest_history (guest_session_id, created_at),
+      KEY credit_reference (reference_type, reference_id)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS store_products (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      product_code VARCHAR(60) NOT NULL UNIQUE,
+      name VARCHAR(100) NOT NULL,
+      description VARCHAR(255) DEFAULT '',
+      product_type VARCHAR(40) NOT NULL,
+      amount_minor INT NOT NULL,
+      currency CHAR(3) NOT NULL DEFAULT 'USD',
+      credits_awarded INT NOT NULL DEFAULT 0,
+      gold_awarded INT NOT NULL DEFAULT 0,
+      diamonds_awarded INT NOT NULL DEFAULT 0,
+      rank_awarded VARCHAR(32) NULL,
+      billing_type VARCHAR(24) NOT NULL DEFAULT 'one_time',
+      active TINYINT NOT NULL DEFAULT 1,
+      inventory_limit INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY store_product_active (active, product_type)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS payment_orders (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      product_id INT NOT NULL,
+      provider VARCHAR(32) NOT NULL,
+      provider_order_id VARCHAR(120) NULL UNIQUE,
+      provider_payment_id VARCHAR(120) NULL,
+      expected_amount_minor INT NOT NULL,
+      currency CHAR(3) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'created',
+      idempotency_key VARCHAR(160) NOT NULL UNIQUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      paid_at DATETIME NULL,
+      fulfilled_at DATETIME NULL,
+      KEY payment_user_history (user_id, created_at),
+      KEY payment_status (status, created_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS payment_webhook_events (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      provider VARCHAR(32) NOT NULL,
+      provider_event_id VARCHAR(160) NOT NULL,
+      event_type VARCHAR(80) NOT NULL,
+      signature_verified TINYINT NOT NULL DEFAULT 0,
+      payload_hash CHAR(64) NOT NULL,
+      processed_at DATETIME NULL,
+      processing_status VARCHAR(32) NOT NULL DEFAULT 'received',
+      error_message VARCHAR(500) NULL,
+      UNIQUE KEY payment_event_once (provider, provider_event_id),
+      KEY payment_event_status (processing_status, id)
     )
   `);
 
@@ -717,6 +871,30 @@ async function migrateExistingTables() {
       last_steal_at: "DATETIME NULL",
       token_version: "INT DEFAULT 0",
       created_at: "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    },
+    random_talk_sessions: {
+      user_a_id: "INT NULL",
+      user_b_id: "INT NULL",
+      user_a_type: "VARCHAR(12) NOT NULL DEFAULT 'user'",
+      user_b_type: "VARCHAR(12) NOT NULL DEFAULT 'user'",
+      guest_a_id: "INT NULL",
+      guest_b_id: "INT NULL",
+      charged_minutes_a: "INT NOT NULL DEFAULT 0",
+      charged_minutes_b: "INT NOT NULL DEFAULT 0",
+      credits_charged_a: "INT NOT NULL DEFAULT 0",
+      credits_charged_b: "INT NOT NULL DEFAULT 0",
+    },
+    random_talk_messages: {
+      sender_id: "INT NULL",
+      sender_type: "VARCHAR(12) NOT NULL DEFAULT 'user'",
+      sender_guest_id: "INT NULL",
+    },
+    random_talk_reports: {
+      reporter_user_id: "INT NULL",
+      reported_user_id: "INT NULL",
+      reporter_guest_id: "INT NULL",
+      reported_guest_id: "INT NULL",
+      reporter_identity: "VARCHAR(64) NULL",
     },
     rooms: {
       name: "VARCHAR(80) NOT NULL DEFAULT ''",
@@ -898,12 +1076,41 @@ async function migrateExistingTables() {
     },
   };
 
+  const nonAutoIncrementTables = new Set(["random_talk_sessions", "random_talk_messages"]);
   for (const [table, columns] of Object.entries(migrations)) {
-    await ensureAutoIncrementId(table);
+    if (!nonAutoIncrementTables.has(table)) await ensureAutoIncrementId(table);
     for (const [column, definition] of Object.entries(columns)) {
       await ensureColumn(table, column, definition);
     }
   }
+  await ensureColumnDefinition("random_talk_sessions", "id", "VARCHAR(36) NOT NULL", "varchar");
+  await ensureColumnDefinition("random_talk_messages", "id", "VARCHAR(36) NOT NULL", "varchar");
+  await ensureColumnDefinition("random_talk_messages", "session_id", "VARCHAR(36) NOT NULL", "varchar");
+  await ensureColumnDefinition("random_talk_reports", "session_id", "VARCHAR(36) NOT NULL", "varchar");
+  await ensureColumnDefinition("random_talk_sessions", "user_a_id", "INT NULL", "int");
+  await ensureColumnDefinition("random_talk_sessions", "user_b_id", "INT NULL", "int");
+  await ensureColumnDefinition("random_talk_messages", "sender_id", "INT NULL", "int");
+  await ensureColumnDefinition("random_talk_reports", "reporter_user_id", "INT NULL", "int");
+  await ensureColumnDefinition("random_talk_reports", "reported_user_id", "INT NULL", "int");
+  await pool.query(
+    `UPDATE random_talk_reports
+     SET reporter_identity = CASE
+       WHEN reporter_user_id IS NOT NULL THEN CONCAT('user:', reporter_user_id)
+       WHEN reporter_guest_id IS NOT NULL THEN CONCAT('guest:', reporter_guest_id)
+       ELSE CONCAT('legacy:', id)
+     END
+     WHERE reporter_identity IS NULL OR reporter_identity = ''`
+  );
+  await pool.query(
+    `DELETE duplicate_report
+     FROM random_talk_reports duplicate_report
+     JOIN random_talk_reports original
+       ON original.session_id = duplicate_report.session_id
+      AND original.reporter_identity = duplicate_report.reporter_identity
+      AND original.id < duplicate_report.id`
+  );
+  await query("ALTER TABLE random_talk_reports MODIFY COLUMN reporter_identity VARCHAR(64) NOT NULL");
+  await ensureCompositeUniqueIndex("random_talk_reports", "random_talk_identity_report", "`session_id`, `reporter_identity`");
   await query("ALTER TABLE users MODIFY COLUMN chat_background VARCHAR(40) DEFAULT 'arc-grid'");
 
   const mediumTextColumns = {
@@ -935,6 +1142,32 @@ async function migrateExistingTables() {
   await ensureIndex("users", "idx_users_diamond_board", "`diamonds`, `username`");
   await ensureIndex("intruder_scores", "idx_intruder_score_board", "`points`, `shots`");
   await ensureIndex("news_posts", "idx_news_posts_created", "`created_at`");
+  await ensureIndex("random_talk_sessions", "idx_random_guest_a", "`guest_a_id`, `status`");
+  await ensureIndex("random_talk_sessions", "idx_random_guest_b", "`guest_b_id`, `status`");
+
+  await pool.query("INSERT IGNORE INTO user_wallets (user_id, credit_balance) SELECT id, 500 FROM users");
+  await pool.query(
+    `INSERT IGNORE INTO credit_transactions
+      (user_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, idempotency_key, metadata_json)
+     SELECT id, 'welcome_grant', 500, 0, 500, 'registration', CAST(id AS CHAR), CONCAT('welcome:user:', id), JSON_OBJECT('source', 'schema_backfill')
+     FROM users`
+  );
+  const products = [
+    ["credits_1000", "1,000 Credits", "Top up Random Talk with 1,000 account-bound credits.", "credits", 400, "USD", 1000, 0, 0, null, "one_time", 1, null],
+    ["credits_5000", "5,000 Credits", "Top up Random Talk with 5,000 account-bound credits.", "credits", 1500, "USD", 5000, 0, 0, null, "one_time", 1, null],
+    ["credits_10000", "10,000 Credits", "Top up Random Talk with 10,000 account-bound credits.", "credits", 2500, "USD", 10000, 0, 0, null, "one_time", 1, null],
+    ["premium_lifetime_bundle", "Premium Rank — Lifetime", "Lifetime Premium, 50,000,000 gold and 10,000 diamonds.", "membership", 400, "USD", 0, 50000000, 10000, "premium", "lifetime", 1, null],
+    ["owner_monthly", "Community Owner — 30 days", "Limited community-management role. No technical or payment ownership.", "limited_role", 1500, "USD", 0, 0, 0, "owner", "fixed_30_days", 1, 1],
+  ];
+  for (const product of products) {
+    await pool.query(
+      `INSERT INTO store_products
+        (product_code, name, description, product_type, amount_minor, currency, credits_awarded, gold_awarded, diamonds_awarded, rank_awarded, billing_type, active, inventory_limit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description)`,
+      product
+    );
+  }
 
   await relaxLegacyRequiredColumns();
   await migrateLegacyUserData();

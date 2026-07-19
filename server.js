@@ -21,6 +21,8 @@ const susGameRoutes = require("./routes/sus");
 const susGameService = require("./services/susGameService");
 const randomTalkRoutes = require("./routes/randomTalk");
 const randomTalkService = require("./services/randomTalkService");
+const { guestFromPayload } = require("./services/guestSessionService");
+const storeRoutes = require("./routes/store");
 
 const app = express();
 const server = http.createServer(app);
@@ -33,9 +35,21 @@ try {
   console.warn("socket.io package is not installed; realtime will use the event-stream fallback.");
 }
 
+const configuredOrigins = new Set(
+  [process.env.SITE_ORIGIN, process.env.PUBLIC_URL, "https://teenchattown.info", "https://www.teenchattown.info"]
+    .filter(Boolean)
+    .map((value) => String(value).replace(/\/$/, ""))
+);
+function socketOriginAllowed(origin) {
+  if (!origin) return !isProduction;
+  if (!isProduction && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+  return configuredOrigins.has(String(origin).replace(/\/$/, ""));
+}
+
 const io = SocketServer
   ? new SocketServer(server, {
-      cors: { origin: true, credentials: true },
+      cors: { origin: (origin, callback) => callback(null, socketOriginAllowed(origin)), credentials: true },
+      allowRequest: (req, callback) => callback(null, socketOriginAllowed(req.headers.origin)),
       transports: ["websocket"],
       allowUpgrades: false,
       pingInterval: 25000,
@@ -88,6 +102,7 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/social", socialRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/random-talk", randomTalkRoutes);
+app.use("/api/store", storeRoutes);
 app.use("/api/games/sus", susGameRoutes);
 app.use("/api/games", gameRoutes);
 
@@ -150,9 +165,16 @@ if (io) {
       const token = socket.handshake.auth?.token || socket.handshake.query?.token;
       if (!token) return next(new Error("Login required."));
       const payload = jwt.verify(String(token), process.env.JWT_SECRET);
+      if (payload.kind === "guest") {
+        const guest = await guestFromPayload(payload);
+        if (!guest) return next(new Error("Guest session expired."));
+        socket.user = guest;
+        return next();
+      }
       const [rows] = await database.query("SELECT * FROM users WHERE id = ?", [payload.id]);
       const user = rows[0];
       if (!user) return next(new Error("Login required."));
+      if (Number(payload.v || 0) !== Number(user.token_version || 0)) return next(new Error("Login required."));
       if (user.banned_until && new Date(user.banned_until) > new Date()) return next(new Error("This account is banned."));
       if (user.kicked_until && new Date(user.kicked_until) > new Date()) return next(new Error("You were temporarily kicked. Please try again later."));
       socket.user = user;
@@ -166,24 +188,32 @@ if (io) {
   io.on("connection", async (socket) => {
     socket.join(`user:${socket.user.id}`);
     socket.emit("ready", true);
-    susGameService.reconnect(socket.user.id);
+    if (!socket.user.isGuest) susGameService.reconnect(socket.user.id);
     randomTalkService.reconnect(socket.user.id);
-    await database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch((error) => {
-      console.error("Could not update last_seen for socket connect:", error.message);
-    });
-    broadcast("users-changed", { userId: socket.user.id, online: true });
+    if (!socket.user.isGuest) {
+      await database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch((error) => {
+        console.error("Could not update last_seen for socket connect:", error.message);
+      });
+      broadcast("users-changed", { userId: socket.user.id, online: true });
+    }
     socket.on("presence", () => {
-      database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch(() => {});
+      if (!socket.user.isGuest) database.query("UPDATE users SET last_seen = NOW(), is_online = 1 WHERE id = ?", [socket.user.id]).catch(() => {});
     });
     socket.on("random-talk-typing", (data = {}) => randomTalkService.typing(socket.user.id, data.typing));
+    socket.on("random-talk-call-signal", (data = {}) => {
+      try { randomTalkService.callSignal(socket.user.id, data); }
+      catch (error) { socket.emit("random-talk-call-error", { code: error.code || "CALL_ERROR", message: error.message || "Call action failed." }); }
+    });
     socket.on("disconnect", async () => {
       if (io.sockets.adapter.rooms.get(`user:${socket.user.id}`)?.size) return;
-      susGameService.handleDisconnect(socket.user.id);
+      if (!socket.user.isGuest) susGameService.handleDisconnect(socket.user.id);
       randomTalkService.handleDisconnect(socket.user.id);
-      await database.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [socket.user.id]).catch((error) => {
-        console.error("Could not update last_seen for socket disconnect:", error.message);
-      });
-      broadcast("users-changed", { userId: socket.user.id, online: false });
+      if (!socket.user.isGuest) {
+        await database.query("UPDATE users SET last_seen = NOW(), is_online = 0 WHERE id = ?", [socket.user.id]).catch((error) => {
+          console.error("Could not update last_seen for socket disconnect:", error.message);
+        });
+        broadcast("users-changed", { userId: socket.user.id, online: false });
+      }
     });
   });
 }
