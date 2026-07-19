@@ -57,4 +57,16 @@ function notifySocketUser(userId, event, payload) {
   return true;
 }
 
-module.exports = { addClient, removeClient, broadcast, notifyUser, notifySocketUser, setSocketServer };
+function emitSocketRoom(room, event, payload) {
+  if (!ioServer) return false;
+  ioServer.to(String(room)).emit(event, payload);
+  return true;
+}
+
+function emitSocket(event, payload) {
+  if (!ioServer) return false;
+  ioServer.emit(event, payload);
+  return true;
+}
+
+module.exports = { addClient, removeClient, broadcast, notifyUser, notifySocketUser, emitSocketRoom, emitSocket, setSocketServer };

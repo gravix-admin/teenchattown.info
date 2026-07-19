@@ -62,6 +62,14 @@ async function cleanExpiredData() {
     await pool.query("DELETE FROM welcome_sessions WHERE started_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 45 DAY)");
     await pool.query("UPDATE guest_sessions SET revoked_at = COALESCE(revoked_at, UTC_TIMESTAMP()) WHERE expires_at < UTC_TIMESTAMP() AND revoked_at IS NULL");
     await pool.query("DELETE FROM random_talk_blocks WHERE expires_at IS NOT NULL AND expires_at < UTC_TIMESTAMP()");
+    await pool.query("DELETE a FROM quiz_room_answers a JOIN quiz_room_sessions s ON s.id = a.session_id WHERE s.resolved_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)");
+    await pool.query("DELETE FROM quiz_room_sessions WHERE resolved_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 30 DAY)");
+    await pool.query("DELETE FROM quiz_question_history WHERE used_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 60 DAY)");
+    await pool.query("DELETE a FROM quiz_tournament_answers a JOIN quiz_tournament_matches m ON m.id = a.match_id JOIN quiz_tournaments t ON t.id = m.tournament_id WHERE t.finished_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 180 DAY)");
+    await pool.query("DELETE e FROM quiz_tournament_events e JOIN quiz_tournaments t ON t.id = e.tournament_id WHERE t.finished_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 180 DAY)");
+    await pool.query("DELETE m FROM quiz_tournament_matches m JOIN quiz_tournaments t ON t.id = m.tournament_id WHERE t.finished_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 180 DAY)");
+    await pool.query("DELETE p FROM quiz_tournament_players p JOIN quiz_tournaments t ON t.id = p.tournament_id WHERE t.finished_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 180 DAY)");
+    await pool.query("DELETE FROM quiz_tournaments WHERE finished_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 180 DAY)");
   } catch (error) {
     console.error("[retention] cleanup failed:", error.message);
   } finally {

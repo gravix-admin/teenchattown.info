@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Quiz Bot">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#818cf8"/><stop offset="1" stop-color="#4338ca"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fde68a"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-opacity=".32"/></filter>
+  </defs>
+  <circle cx="128" cy="128" r="112" fill="#0b1024" stroke="#3730a3" stroke-width="7"/>
+  <path d="M128 38v23" stroke="#a5b4fc" stroke-width="8" stroke-linecap="round"/><circle cx="128" cy="31" r="11" fill="url(#gold)"/>
+  <g filter="url(#shadow)">
+    <rect x="53" y="61" width="150" height="125" rx="42" fill="url(#body)" stroke="#c7d2fe" stroke-width="5"/>
+    <rect x="69" y="81" width="118" height="72" rx="28" fill="#090e22"/>
+    <circle cx="103" cy="116" r="12" fill="#67e8f9"/><circle cx="153" cy="116" r="12" fill="#67e8f9"/>
+    <path d="M103 139c14 10 36 10 50 0" fill="none" stroke="#a5b4fc" stroke-width="6" stroke-linecap="round"/>
+    <path d="M88 185v27M168 185v27M52 109H33v43M204 109h19v43" fill="none" stroke="#818cf8" stroke-width="11" stroke-linecap="round"/>
+    <path d="M95 183h66l-8 36h-50z" fill="#111936" stroke="#818cf8" stroke-width="4"/>
+    <path d="m116 192 12-5 12 5-3 13h-18z" fill="url(#gold)"/>
+  </g>
+  <circle cx="194" cy="55" r="28" fill="url(#gold)" stroke="#fff7cc" stroke-width="4"/>
+  <path d="M185 48c1-10 20-12 20 1 0 9-11 8-11 16m0 8h.1" fill="none" stroke="#51330b" stroke-width="6" stroke-linecap="round"/>
+</svg>

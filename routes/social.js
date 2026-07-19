@@ -8,6 +8,7 @@ const { publicUser } = require("../services/userService");
 const { audioUpload, imageUpload, fileToDataUrl } = require("../services/upload");
 const { rankPower, normalizeRank } = require("../services/ranks");
 const { canViewDeveloperProfile } = require("../services/developerVisibilityService");
+const quizService = require("../services/quizService");
 
 const router = express.Router();
 const galleryUpload = imageUpload("gallery");
@@ -249,7 +250,7 @@ router.get("/profiles/:id", requireAuth, async (req, res) => {
   if (!user || isSystemUser(user)) return res.status(404).json({ error: "Profile not found." });
   if (!(await canViewDeveloperProfile(req.user, user))) return res.status(403).json({ error: "This profile is private.", code: "DEVELOPER_PROFILE_HIDDEN" });
   pool.query("UPDATE users SET visitor_count = visitor_count + 1 WHERE id = ?", [req.params.id]).catch(() => {});
-  const [[badges], [gifts], [[likes]], [[liked]]] = await Promise.all([
+  const [[badges], [gifts], [[likes]], [[liked]], quizStats] = await Promise.all([
     pool.query(
       `SELECT a.* FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id WHERE ua.user_id = ? ORDER BY ua.created_at DESC LIMIT 12`,
       [req.params.id]
@@ -262,10 +263,11 @@ router.get("/profiles/:id", requireAuth, async (req, res) => {
     ),
     pool.query("SELECT profile_likes AS total FROM users WHERE id = ?", [req.params.id]),
     pool.query("SELECT id FROM profile_likes WHERE profile_user_id = ? AND liker_id = ? LIMIT 1", [req.params.id, req.user.id]),
+    quizService.stats(Number(req.params.id)),
   ]);
   user.profile_likes = likes.total;
   res.set("Cache-Control", "private, no-store");
-  res.json({ user: publicUser(user, req.user), badges, gifts, likedByMe: Boolean(liked), likeCount: likes.total });
+  res.json({ user: publicUser(user, req.user), badges, gifts, quizStats, likedByMe: Boolean(liked), likeCount: likes.total });
 });
 
 router.get("/profiles/:id/social", requireAuth, async (req, res) => {
@@ -669,7 +671,7 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
   const publicUsers = "rank_name NOT IN ('bot', 'developer') AND LOWER(username) NOT IN ('intruder', 'zombie')";
   const board = String(req.query.board || "").toLowerCase();
   const cached = responseCache.leaderboards.get(board);
-  if (cached && Date.now() - cached.at < 15000) {
+  if (req.query.fresh !== "1" && cached && Date.now() - cached.at < 15000) {
     res.set("Cache-Control", "private, max-age=10");
     return res.json(cached.data);
   }
@@ -687,6 +689,16 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
        ORDER BY s.points DESC, s.shots DESC, u.username ASC
        LIMIT 20`
     ),
+    quiz: () => pool.query(
+      `SELECT u.id, u.username, u.display_name, u.avatar_url, u.rank_name, u.profile_title,
+              u.xp, u.gold, u.diamonds, u.message_count,
+              s.quiz_score, s.quiz_correct_answers, s.quiz_fastest_answer_ms, s.quiz_best_streak,
+              s.quiz_current_streak, s.quiz_tournaments_won, s.quiz_matches_won
+       FROM quiz_user_stats s JOIN users u ON u.id = s.user_id
+       WHERE ${publicUsers}
+       ORDER BY s.quiz_score DESC, s.quiz_correct_answers DESC, s.quiz_best_streak DESC, s.quiz_fastest_answer_ms ASC, u.username ASC
+       LIMIT 50`
+    ),
   };
   if (queries[board]) {
     const [rows] = await queries[board]();
@@ -699,7 +711,8 @@ router.get("/leaderboards", requireAuth, async (req, res) => {
   const [gold] = await queries.gold();
   const [diamonds] = await queries.diamonds();
   const [shooters] = await queries.shooters();
-  res.json({ xp, gold, diamonds, shooters });
+  const [quiz] = await queries.quiz();
+  res.json({ xp, gold, diamonds, shooters, quiz });
 });
 
 router.post("/memberships/rank", requireAuth, async (req, res) => {

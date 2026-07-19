@@ -23,6 +23,8 @@ const randomTalkRoutes = require("./routes/randomTalk");
 const randomTalkService = require("./services/randomTalkService");
 const { guestFromPayload } = require("./services/guestSessionService");
 const storeRoutes = require("./routes/store");
+const quizRoutes = require("./routes/quiz");
+const quizService = require("./services/quizService");
 
 const app = express();
 const server = http.createServer(app);
@@ -103,6 +105,7 @@ app.use("/api/social", socialRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/random-talk", randomTalkRoutes);
 app.use("/api/store", storeRoutes);
+app.use("/api/quiz", quizRoutes);
 app.use("/api/games/sus", susGameRoutes);
 app.use("/api/games", gameRoutes);
 
@@ -139,6 +142,7 @@ async function keepSchemaReady() {
       startDataRetention();
       await susGameService.initialize();
       await randomTalkService.initialize();
+      await quizService.initialize();
       return;
     } catch (error) {
       console.error("Database schema check failed; retrying shortly.");
@@ -203,6 +207,39 @@ if (io) {
     socket.on("random-talk-call-signal", (data = {}) => {
       try { randomTalkService.callSignal(socket.user.id, data); }
       catch (error) { socket.emit("random-talk-call-error", { code: error.code || "CALL_ERROR", message: error.message || "Call action failed." }); }
+    });
+    socket.on("quiz:subscribe", async (data = {}) => {
+      if (socket.user.isGuest) return socket.emit("quiz:error", { code: "REGISTERED_ONLY", message: "Create an account to play Quiz Room." });
+      const roomId = Number(data.roomId || 0);
+      if (roomId === quizService.getQuizRoomId()) {
+        socket.join(`quiz:room:${roomId}`);
+        socket.emit("quiz:state", await quizService.roomState().catch(() => null));
+      }
+      if (data.contest === true) {
+        socket.join("quiz:contest");
+        socket.emit("contest:state", await quizService.contestState(socket.user).catch(() => null));
+      }
+    });
+    socket.on("quiz:unsubscribe", (data = {}) => {
+      const roomId = Number(data.roomId || 0);
+      if (roomId === quizService.getQuizRoomId()) socket.leave(`quiz:room:${roomId}`);
+      if (data.contest === true) socket.leave("quiz:contest");
+    });
+    socket.on("quiz:watch-match", async (data = {}) => {
+      if (socket.user.isGuest) return;
+      const matchId = Number(data.matchId || 0);
+      if (!matchId) return;
+      try {
+        const state = await quizService.matchState(matchId, socket.user);
+        socket.join(`quiz:match:${matchId}`);
+        socket.emit("contest:match_state", state);
+      } catch (error) {
+        socket.emit("quiz:error", { code: error.code || "MATCH_NOT_FOUND", message: error.message || "Contest match not found." });
+      }
+    });
+    socket.on("quiz:unwatch-match", (data = {}) => {
+      const matchId = Number(data.matchId || 0);
+      if (matchId) socket.leave(`quiz:match:${matchId}`);
     });
     socket.on("disconnect", async () => {
       if (io.sockets.adapter.rooms.get(`user:${socket.user.id}`)?.size) return;

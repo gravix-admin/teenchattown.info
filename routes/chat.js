@@ -3,11 +3,12 @@ const bcrypt = require("bcrypt");
 const pool = require("../database");
 const { requireAuth, isStaff, rankPower, cacheUser } = require("../middleware/auth");
 const { chatUpload, imageUpload, fileToDataUrl } = require("../services/upload");
-const { addClient, removeClient, broadcast, notifyUser } = require("../services/events");
+const { addClient, removeClient, broadcast, notifyUser, emitSocketRoom } = require("../services/events");
 const { INTRUDER_PREFIX, handlePossibleShot } = require("../services/intruderService");
 const { BET_PREFIX, handleBetCommand } = require("../services/betService");
 const { FUN_PREFIXES, handleFunCommand } = require("../services/funCommandService");
 const { publicUser } = require("../services/userService");
+const quizService = require("../services/quizService");
 
 const router = express.Router();
 const upload = chatUpload("chat");
@@ -208,8 +209,12 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
     frame: req.user.frame,
   };
   clearRoomMessageCache(req.params.roomId);
-  broadcast("message", message);
+  if (Number(req.params.roomId) === quizService.getQuizRoomId()) emitSocketRoom(`quiz:room:${quizService.getQuizRoomId()}`, "message", message);
+  else broadcast("message", message);
   res.status(201).json(message);
+  quizService.handleRoomMessage(req.params.roomId, message, req.user).catch((error) => {
+    if (error.code !== "QUIZ_RATE_LIMIT") console.error("[quiz answer] processing failed:", error.message);
+  });
   (async () => {
     await pool.query("UPDATE users SET message_count = message_count + 1, xp = xp + IF((message_count + 1) % 2 = 0, 1, 0), gold = gold + IF((message_count + 1) % 10 = 0, 100, 0) WHERE id = ?", [req.user.id]);
     req.user.message_count = Number(req.user.message_count || 0) + 1;
@@ -324,7 +329,7 @@ router.delete("/rooms/:roomId", requireAuth, async (req, res) => {
   if (!["chief", "owner", "developer"].includes(req.user.rank_name)) return res.status(403).json({ error: "Only Chief, Owner, or higher can delete rooms." });
   const room = await roomById(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found." });
-  if (String(room.name).toLowerCase() === "main room") return res.status(400).json({ error: "Main Room cannot be deleted." });
+  if (["main room", "quiz room"].includes(String(room.name).toLowerCase())) return res.status(400).json({ error: `${room.name} is a permanent room and cannot be deleted.` });
   await pool.query("DELETE FROM rooms WHERE id = ?", [room.id]);
   roomCache.clear();
   clearRoomMessageCache(room.id);

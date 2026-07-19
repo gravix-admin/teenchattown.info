@@ -100,6 +100,7 @@ const state = {
   selectedRank: "s-vip",
   activeXoGameId: null,
   xoExpiryTimer: null,
+  quizRoomTicker: null,
   voiceRecorder: null,
   voiceStream: null,
   voiceChunks: [],
@@ -156,6 +157,7 @@ const stealPrefix = "::steal:";
 const huntPrefix = "::hunt:";
 const roastPrefix = "::roast:";
 const xoPrefix = "::xo:";
+const quizPrefix = "[[QUIZ]]";
 const funCommandPrefixes = [confessPrefix, shipPrefix, stealPrefix, huntPrefix, roastPrefix];
 const profileFrameAssets = {
   cosmic: "/assets/frame-cosmic.png",
@@ -462,6 +464,7 @@ function setView(view) {
     state.xoExpiryTimer = null;
     state.activeXoGameId = null;
     window.SusGame?.leaveView?.();
+    window.QuizGame?.leaveView?.();
   }
   $$(".view").forEach((node) => node.classList.remove("active"));
   $(`#${view}View`)?.classList.add("active");
@@ -473,7 +476,7 @@ function setView(view) {
     renderNews().catch((error) => toast(error.message));
   }
   if (view === "leaderboard") renderLeaderboard().catch((error) => toast(error.message));
-  if (view === "games" && !state.activeXoGameId && !window.SusGame?.isOpen?.()) renderGames().catch((error) => toast(error.message));
+  if (view === "games" && !state.activeXoGameId && !window.SusGame?.isOpen?.() && !window.QuizGame?.isOpen?.()) renderGames().catch((error) => toast(error.message));
   if (view === "chatStore") renderChatStore().catch((error) => toast(error.message));
   if (view === "store") renderCreditStore().catch((error) => toast(error.message));
 }
@@ -922,6 +925,8 @@ function warmFastViews() {
 
 function renderRooms() {
   const room = state.rooms.find((item) => Number(item.id) === Number(state.currentRoomId));
+  document.body.classList.toggle("quiz-room-active", String(room?.name || "").toLowerCase() === "quiz room");
+  if (String(room?.name || "").toLowerCase() === "quiz room") loadQuizGame().catch(() => {});
   if (room) {
     if ($("#roomTitle")) $("#roomTitle").textContent = room.name;
     if ($("#roomDescription")) $("#roomDescription").textContent = "";
@@ -1012,6 +1017,27 @@ function loadRandomTalk() {
     .then(() => window.RandomTalk)
     .catch((error) => { randomTalkLoadPromise = null; throw error; });
   return randomTalkLoadPromise;
+}
+
+let quizGameLoadPromise = null;
+function loadQuizGame() {
+  if (window.QuizGame) return Promise.resolve(window.QuizGame);
+  if (quizGameLoadPromise) return quizGameLoadPromise;
+  const cssReady = new Promise((resolve) => {
+    let link = document.querySelector('link[data-quiz-style]');
+    if (link) return resolve();
+    link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "/quiz.css?v=20260719-quiz-v1";
+    link.dataset.quizStyle = "1";
+    link.addEventListener("load", resolve, { once: true });
+    link.addEventListener("error", resolve, { once: true });
+    document.head.appendChild(link);
+  });
+  quizGameLoadPromise = Promise.all([cssReady, import("/quiz.js?v=20260719-quiz-v1")])
+    .then(() => window.QuizGame)
+    .catch((error) => { quizGameLoadPromise = null; throw error; });
+  return quizGameLoadPromise;
 }
 
 let welcomeChannel = null;
@@ -1226,12 +1252,16 @@ async function switchRoom(roomId) {
   if (roomLocked(room) && !staffRanks.has(state.me.rank) && Number(room.created_by) !== Number(state.me.id)) {
     return openRoomPasswordModal(room);
   }
+  const previousRoom = state.rooms.find((item) => Number(item.id) === Number(state.currentRoomId));
+  if (String(previousRoom?.name || "").toLowerCase() === "quiz room" && String(room.name || "").toLowerCase() !== "quiz room") {
+    state.socket?.connected && state.socket.emit("quiz:unsubscribe", { roomId: previousRoom.id });
+  }
   state.currentRoomId = roomId;
   localStorage.setItem("tct_current_room_id", String(roomId));
   $("#drawer").classList.add("hidden");
   setView("chat");
-  await loadMessages();
   renderRooms();
+  await loadMessages();
 }
 
 function openRoomPasswordModal(room) {
@@ -1253,8 +1283,8 @@ function openRoomPasswordModal(room) {
     localStorage.setItem("tct_current_room_id", String(room.id));
     $("#drawer").classList.add("hidden");
     setView("chat");
-    await loadMessages();
     renderRooms();
+    await loadMessages();
   });
   if (!$("#userActionModal").open) $("#userActionModal").showModal();
 }
@@ -1362,6 +1392,20 @@ function renderMessages() {
     bindMessageActions(container);
   }
   container.scrollTop = container.scrollHeight;
+  clearInterval(state.quizRoomTicker);
+  state.quizRoomTicker = null;
+  if (document.body.classList.contains("quiz-room-active")) {
+    const paintQuizRoomTimers = () => {
+      $$('[data-quiz-room-countdown]', container).forEach((node) => {
+        const remainingMs = Math.max(0, new Date(node.dataset.quizRoomCountdown).getTime() - Date.now());
+        const elapsedMs = Math.max(0, 10000 - remainingMs);
+        const points = Math.max(60, 100 - Math.floor(elapsedMs / 2000) * 10);
+        node.textContent = remainingMs > 0 ? `${Math.ceil(remainingMs / 1000)}s · ${points} pts` : "Round closed";
+      });
+    };
+    paintQuizRoomTimers();
+    state.quizRoomTicker = setInterval(paintQuizRoomTimers, 250);
+  }
 }
 
 function renderIntruderMessage(payload) {
@@ -1433,6 +1477,22 @@ function renderXoMessage(payload) {
 }
 
 function renderMessageBody(body, user = {}) {
+  if (body.startsWith(quizPrefix)) {
+    try {
+      const payload = JSON.parse(body.slice(quizPrefix.length));
+      const type = String(payload?.type || "question");
+      if (type === "question") return `<div class="quiz-message-card"><small>${html(payload.category || "Quiz Room")} &middot; Question ${Number(payload.questionNumber || payload.number || 0)}</small><strong>${html(payload.question || "Get ready...")}</strong><span>${html(payload.hint || "Type your answer in chat")}</span><b data-quiz-room-countdown="${html(payload.expiresAt || "")}">${Number(payload.durationSeconds || 10)}s &middot; ${Number(payload.maximumPoints || 100)} pts</b></div>`;
+      if (type === "winner") return `<div class="quiz-message-card quiz-result"><small>Correct answer</small><strong>${html(payload.username || "A player")} wins ${compactNumber(payload.points || 0)} points</strong><span>${html(payload.answer || "")} &middot; ${(Number(payload.speedMs || payload.responseMs || 0) / 1000).toFixed(1)}s response</span></div>`;
+      if (type === "expired") return `<div class="quiz-message-card quiz-expired"><small>Time expired</small><strong>No correct answer this round</strong><span>Answer: ${html(payload.answer || "Not revealed")}</span></div>`;
+      if (type === "paused") return '<div class="quiz-message-card quiz-expired"><strong>Quiz Room paused by the Developer</strong><span>The current score and question are safely frozen.</span></div>';
+      if (type === "resumed") return '<div class="quiz-message-card"><strong>Quiz Room resumed</strong><span>The server timer is running again.</span></div>';
+      if (type === "skipped") return `<div class="quiz-message-card quiz-expired"><strong>Question skipped</strong><span>Answer: ${html(payload.answer || "Not revealed")}</span></div>`;
+      if (type === "contest") return `<div class="quiz-message-card quiz-result"><small>Official Quiz Contest</small><strong>${html(payload.headline || "Tournament update")}</strong><span>${html(payload.detail || "Open Games to view the live bracket.")}</span></div>`;
+      return "";
+    } catch (_error) {
+      return "";
+    }
+  }
   if (body.startsWith(betPrefix)) {
     try {
       return renderBetMessage(JSON.parse(body.slice(betPrefix.length))) || "";
@@ -1887,13 +1947,16 @@ async function openXoGame(gameId) {
 async function renderGames() {
   const root = $("#gamesHub");
   if (!root) return;
+  try { await loadQuizGame(); } catch (_error) { /* Other games remain available. */ }
   clearInterval(state.xoExpiryTimer);
   state.activeXoGameId = null;
   root.innerHTML = `
+    ${window.QuizGame?.cardHtml?.() || ""}
     ${window.SusGame?.cardHtml?.() || ""}
     <section class="game-feature-card"><div class="game-feature-art"><img src="/assets/game-xo.svg" alt="" /></div><div><span class="eyebrow">Quick match</span><h3>X-O</h3><p>Start a match and TownBot posts a join button in the room. The waiting invite expires after one minute. Each player stakes 500 gold only after both join.</p><button class="primary" id="startXoGame" type="button">Start X-O match</button></div></section>
     <section class="game-open-list" id="xoGameList"><div class="view-loading"><span></span><strong>Loading X-O matches...</strong></div></section>`;
   window.SusGame?.bindCard?.(root);
+  window.QuizGame?.bindCard?.(root);
   $("#startXoGame")?.addEventListener("click", async (event) => {
     event.currentTarget.disabled = true;
     try {
@@ -2258,7 +2321,7 @@ function openNewsComposer() {
 
 function localLeaderboardData(board) {
   const key = board === "diamonds" ? "diamonds" : board === "gold" ? "gold" : "xp";
-  const rows = board === "shooters" ? [] : [...state.users]
+  const rows = ["shooters", "quiz"].includes(board) ? [] : [...state.users]
     .filter(visibleInUserList)
     .sort((a, b) => Number(b[key] || 0) - Number(a[key] || 0) || String(a.username).localeCompare(String(b.username)))
     .slice(0, 20)
@@ -2277,7 +2340,7 @@ function localLeaderboardData(board) {
 }
 
 function paintLeaderboard(data, tab = state.leaderboardTab) {
-  const labels = { xp: "Top XP", gold: "Top Gold", diamonds: "Top Diamonds", shooters: "Top Shooters" };
+  const labels = { xp: "Top XP", gold: "Top Gold", diamonds: "Top Diamonds", shooters: "Top Shooters", quiz: "Quiz" };
   const rows = data.rows || data[tab] || [];
   $("#leaderboard").innerHTML = `
     <div class="leaderboard-tabs">
@@ -2291,10 +2354,17 @@ function paintLeaderboard(data, tab = state.leaderboardTab) {
             ? user.diamonds
             : tab === "shooters"
               ? user.intruder_points
-              : user.xp;
-        const meta = tab === "shooters" ? ` | ${compactNumber(user.intruder_shots || 0)} shots` : "";
+              : tab === "quiz"
+                ? user.quiz_score
+                : user.xp;
+        const meta = tab === "shooters"
+          ? ` | ${compactNumber(user.intruder_shots || 0)} shots`
+          : tab === "quiz"
+            ? ` | ${index < 8 ? "Contest seed | " : ""}${compactNumber(user.quiz_correct_answers || 0)} correct | ${compactNumber(user.quiz_best_streak || 0)} best streak${Number(user.quiz_tournaments_won || 0) ? ` | ${Number(user.quiz_tournaments_won)} titles` : ""}`
+            : "";
+        const quizClasses = tab === "quiz" ? `${index < 8 ? " quiz-leader-top-eight" : ""}${index < 3 ? " quiz-leader-top-three" : ""}${Number(user.id) === Number(state.me?.id) ? " quiz-leader-self" : ""}` : "";
         return `
-          <article class="leaderboard-row">
+          <article class="leaderboard-row${quizClasses}">
             <span class="leaderboard-rank">#${index + 1}</span>
             <img class="avatar" src="${html(user.avatar_url || "/assets/avatar-other.svg")}" alt="" />
             <div><strong>${html(user.display_name || user.username)}</strong><small>${rankBadge(user.rank_name, user.profile_title)}${meta}</small></div>
@@ -2315,7 +2385,7 @@ async function renderLeaderboard({ force = false } = {}) {
   const cached = state.leaderboardCache[tab];
   paintLeaderboard(cached?.data || localLeaderboardData(tab), tab);
   if (!force && cached && Date.now() - cached.at < 30000) return;
-  const data = await api(`/api/social/leaderboards?board=${encodeURIComponent(tab)}`, force ? { cache: "no-store" } : {});
+  const data = await api(`/api/social/leaderboards?board=${encodeURIComponent(tab)}${force ? "&fresh=1" : ""}`, force ? { cache: "no-store" } : {});
   state.leaderboardCache[tab] = { data, at: Date.now() };
   writeLocalCache("tct_leaderboard_cache_v2", state.leaderboardCache);
   if ($("#leaderboardView").classList.contains("active") && state.leaderboardTab === tab) paintLeaderboard(data, tab);
@@ -2547,7 +2617,8 @@ async function openProfile(userId) {
     ? `<button class="primary" data-own-action="edit" type="button">Edit Profile</button>`
     : `<button class="primary" data-pm-user="${user.id}" type="button">Message</button>${state.friends.some((item) => Number(item.id || item.friend_id) === Number(user.id)) ? `<button data-remove-friend-action="${user.id}" type="button">Remove Friend</button>` : `<button data-add-friend="${user.id}" type="button">Add Friend</button>`}`;
   $("#profileInfo").innerHTML = profileOverviewPanel(user);
-  $("#profileAbout").innerHTML = `<div class="profile-overview-card profile-about-card"><span class="eyebrow">Profile story</span><h3>About ${html(displayName(user))}</h3><p>${html(user.aboutMe || user.bio || "This profile is still being decorated.")}</p><div class="profile-stat-grid"><article><span>Level</span><strong>${info.level}</strong></article><article><span>Likes</span><strong>${compactNumber(data.likeCount || user.profileLikes || 0)}</strong></article></div></div>`;
+  const quizStats = data.quizStats || {};
+  $("#profileAbout").innerHTML = `<div class="profile-overview-card profile-about-card"><span class="eyebrow">Profile story</span><h3>About ${html(displayName(user))}</h3><p>${html(user.aboutMe || user.bio || "This profile is still being decorated.")}</p><div class="profile-stat-grid"><article><span>Level</span><strong>${info.level}</strong></article><article><span>Likes</span><strong>${compactNumber(data.likeCount || user.profileLikes || 0)}</strong></article></div><section class="quiz-profile-stats"><article><span>Quiz score</span><strong>${compactNumber(quizStats.quiz_score || 0)}</strong></article><article><span>Correct</span><strong>${compactNumber(quizStats.quiz_correct_answers || 0)}</strong></article><article><span>Accuracy</span><strong>${Number(quizStats.quiz_accuracy || 0)}%</strong></article><article><span>Best streak</span><strong>${compactNumber(quizStats.quiz_best_streak || 0)}</strong></article><article><span>Fastest</span><strong>${quizStats.quiz_fastest_answer_ms ? `${(Number(quizStats.quiz_fastest_answer_ms) / 1000).toFixed(2)}s` : "--"}</strong></article><article><span>Matches won</span><strong>${compactNumber(quizStats.quiz_matches_won || 0)}</strong></article><article><span>Contests</span><strong>${compactNumber(quizStats.quiz_tournaments_played || 0)}</strong></article><article><span>Titles</span><strong>${compactNumber(quizStats.quiz_tournaments_won || 0)}</strong></article></section></div>`;
   const canViewIntel = Boolean(state.me?.rank === "developer" || state.permissions?.viewUserIntel) && !self;
   $("#profileIntelTabButton")?.classList.toggle("hidden", !canViewIntel);
   $("#profileIntel").innerHTML = canViewIntel ? '<div class="profile-loading-card"><span></span><strong>Open this tab to load staff intelligence</strong></div>' : "";
@@ -4192,6 +4263,52 @@ const realtimeHandlers = {
     window.SusGame?.handleRealtime?.("reward", data);
     refreshUsersLight().catch(() => {});
   },
+  "quiz:leaderboard_updated"() {
+    state.leaderboardCache.quiz = null;
+    if ($("#leaderboardView")?.classList.contains("active") && state.leaderboardTab === "quiz") renderLeaderboard({ force: true }).catch(() => {});
+  },
+  "quiz:error"(data = {}) {
+    toast(data.message || "Quiz live connection error.");
+  },
+  "contest:state"(data = {}) {
+    window.QuizGame?.handleRealtime?.("state", data);
+  },
+  "contest:state_changed"(data = {}) {
+    window.QuizGame?.handleRealtime?.("state", data);
+  },
+  "contest:match_state"(data = {}) {
+    window.QuizGame?.handleRealtime?.("match", data);
+  },
+  "contest:match_started"(data = {}) {
+    window.QuizGame?.handleRealtime?.("match", data);
+  },
+  "contest:question_started"(data = {}) {
+    window.QuizGame?.handleRealtime?.("question", data);
+  },
+  "contest:answer_locked"(data = {}) {
+    window.QuizGame?.handleRealtime?.("answer", data);
+  },
+  "contest:question_finished"(data = {}) {
+    window.QuizGame?.handleRealtime?.("question", data);
+  },
+  "contest:score_updated"(data = {}) {
+    window.QuizGame?.handleRealtime?.("score", data);
+  },
+  "contest:match_finished"(data = {}) {
+    window.QuizGame?.handleRealtime?.("finished", data);
+  },
+  "contest:round_started"(data = {}) {
+    window.QuizGame?.handleRealtime?.("state", data);
+  },
+  "contest:round_finished"(data = {}) {
+    window.QuizGame?.handleRealtime?.("state", data);
+  },
+  "contest:tournament_finished"(data = {}) {
+    window.QuizGame?.handleRealtime?.("state", data);
+  },
+  "contest:timer_sync"(data = {}) {
+    window.QuizGame?.handleRealtime?.("timer", data);
+  },
   "random-talk-state"(data = {}) {
     window.RandomTalk?.handleRealtime?.("state", data);
   },
@@ -4328,6 +4445,9 @@ function connectEvents() {
     });
     state.socket.on("connect", () => {
       state.socket.emit("presence");
+      const quizRoom = state.rooms.find((room) => String(room.name).toLowerCase() === "quiz room");
+      if (!state.isGuest && Number(state.currentRoomId) === Number(quizRoom?.id)) state.socket.emit("quiz:subscribe", { roomId: quizRoom.id });
+      if (!state.isGuest && window.QuizGame?.isOpen?.()) state.socket.emit("quiz:subscribe", { contest: true });
       clearInterval(state.presenceTimer);
       state.presenceTimer = setInterval(() => state.socket?.connected && state.socket.emit("presence"), 45000);
       if (state.me && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
@@ -4925,6 +5045,21 @@ window.TCTGameBridge = {
   renderGames,
   getState: () => state,
   socketConnected: () => Boolean(state.socket?.connected),
+};
+window.TCTQuizBridge = {
+  api,
+  html,
+  toast,
+  renderGames,
+  getState: () => state,
+  socketConnected: () => Boolean(state.socket?.connected),
+  emit: (event, payload) => state.socket?.connected && state.socket.emit(event, payload),
+  openQuizRoom: async () => {
+    const room = state.rooms.find((item) => String(item.name || "").toLowerCase() === "quiz room");
+    if (!room) return toast("Quiz Room is still being prepared. Try again shortly.");
+    await switchRoom(room.id);
+    state.socket?.connected && state.socket.emit("quiz:subscribe", { roomId: room.id });
+  },
 };
 window.TCTRandomTalkBridge = {
   api,

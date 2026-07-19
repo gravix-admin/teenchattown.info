@@ -559,6 +559,172 @@ async function initSchema() {
   `);
 
   await query(`
+    CREATE TABLE IF NOT EXISTS quiz_user_stats (
+      user_id INT PRIMARY KEY,
+      quiz_score INT NOT NULL DEFAULT 0,
+      quiz_lifetime_score INT NOT NULL DEFAULT 0,
+      quiz_correct_answers INT NOT NULL DEFAULT 0,
+      quiz_wrong_attempts INT NOT NULL DEFAULT 0,
+      quiz_questions_attempted INT NOT NULL DEFAULT 0,
+      quiz_fastest_answer_ms INT NULL,
+      quiz_current_streak INT NOT NULL DEFAULT 0,
+      quiz_best_streak INT NOT NULL DEFAULT 0,
+      quiz_tournaments_played INT NOT NULL DEFAULT 0,
+      quiz_tournaments_won INT NOT NULL DEFAULT 0,
+      quiz_matches_won INT NOT NULL DEFAULT 0,
+      quiz_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY quiz_score_board (quiz_score, quiz_correct_answers, quiz_best_streak),
+      KEY quiz_lifetime_board (quiz_lifetime_score)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_question_history (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      question_id VARCHAR(36) NOT NULL,
+      question_key VARCHAR(190) NOT NULL,
+      category VARCHAR(60) NOT NULL,
+      used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      KEY quiz_history_recent (used_at),
+      KEY quiz_history_key (question_key, used_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_room_sessions (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      room_id INT NOT NULL,
+      question_id VARCHAR(36) NOT NULL,
+      question_key VARCHAR(190) NOT NULL,
+      question_number INT NOT NULL,
+      category VARCHAR(60) NOT NULL,
+      question_json MEDIUMTEXT NOT NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'active',
+      winner_user_id INT NULL,
+      winning_answer VARCHAR(100) NULL,
+      awarded_points INT NOT NULL DEFAULT 0,
+      response_ms INT NULL,
+      pause_remaining_ms INT NULL,
+      started_at DATETIME NOT NULL,
+      expires_at DATETIME NOT NULL,
+      resolved_at DATETIME NULL,
+      KEY quiz_room_active (room_id, status, id),
+      KEY quiz_room_expiry (status, expires_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_room_answers (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      session_id BIGINT NOT NULL,
+      user_id INT NOT NULL,
+      message_id INT NOT NULL,
+      answer_text VARCHAR(100) NOT NULL,
+      correct TINYINT NOT NULL DEFAULT 0,
+      response_ms INT NOT NULL,
+      awarded_points INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY quiz_answer_message (message_id),
+      KEY quiz_answer_session_order (session_id, id),
+      KEY quiz_answer_user (user_id, created_at)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_tournaments (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      previous_status VARCHAR(32) NULL,
+      current_round INT NOT NULL DEFAULT 0,
+      champion_id INT NULL,
+      created_by INT NOT NULL,
+      roster_locked_at DATETIME NULL,
+      started_at DATETIME NULL,
+      paused_at DATETIME NULL,
+      finished_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY quiz_tournament_status (status, id)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_tournament_players (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      tournament_id BIGINT NOT NULL,
+      user_id INT NOT NULL,
+      seed_number INT NOT NULL,
+      score_at_lock INT NOT NULL DEFAULT 0,
+      joined_at DATETIME NULL,
+      disqualified TINYINT NOT NULL DEFAULT 0,
+      eliminated_round INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY quiz_tournament_user (tournament_id, user_id),
+      UNIQUE KEY quiz_tournament_seed (tournament_id, seed_number),
+      KEY quiz_player_user (user_id, tournament_id)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_tournament_matches (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      tournament_id BIGINT NOT NULL,
+      round_number INT NOT NULL,
+      match_number INT NOT NULL,
+      player_one_id INT NULL,
+      player_two_id INT NULL,
+      player_one_score INT NOT NULL DEFAULT 0,
+      player_two_score INT NOT NULL DEFAULT 0,
+      winner_id INT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      question_index INT NOT NULL DEFAULT 0,
+      sudden_death_index INT NOT NULL DEFAULT 0,
+      question_set_json MEDIUMTEXT NULL,
+      question_started_at DATETIME NULL,
+      question_expires_at DATETIME NULL,
+      pause_remaining_ms INT NULL,
+      join_deadline_at DATETIME NULL,
+      started_at DATETIME NULL,
+      finished_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY quiz_round_match (tournament_id, round_number, match_number),
+      KEY quiz_match_status (status, question_expires_at),
+      KEY quiz_match_player_one (player_one_id, status),
+      KEY quiz_match_player_two (player_two_id, status)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_tournament_answers (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      match_id BIGINT NOT NULL,
+      question_index INT NOT NULL,
+      user_id INT NOT NULL,
+      option_index INT NOT NULL,
+      correct TINYINT NOT NULL DEFAULT 0,
+      response_ms INT NOT NULL,
+      points_awarded INT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY quiz_match_answer_once (match_id, question_index, user_id),
+      KEY quiz_match_answers (match_id, question_index, id)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quiz_tournament_events (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      tournament_id BIGINT NOT NULL,
+      event_type VARCHAR(60) NOT NULL,
+      actor_user_id INT NULL,
+      details_json TEXT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      KEY quiz_event_log (tournament_id, id),
+      KEY quiz_event_type (event_type, created_at)
+    )
+  `);
+
+  await query(`
     CREATE TABLE IF NOT EXISTS sus_matches (
       id VARCHAR(36) PRIMARY KEY,
       lobby_code VARCHAR(8) NOT NULL UNIQUE,
@@ -1340,6 +1506,11 @@ async function seedDefaults() {
      SELECT 'owner', tool, allowed FROM role_permissions WHERE rank_name = 'chief'
      ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)`
   );
+  await pool.query(
+    `INSERT INTO rooms (name, description, image_url, is_pinned, staff_only)
+     SELECT 'Quiz Room', 'Answer live Quiz Bot questions, build streaks, and qualify for the Quiz Contest.', '/assets/room-quiz.svg', 1, 0
+     WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE LOWER(name) = 'quiz room')`
+  );
 
   const [adminRows] = await pool.query("SELECT id FROM users WHERE LOWER(username) = 'admin'");
   if (!adminRows.length) {
@@ -1380,6 +1551,22 @@ async function seedDefaults() {
     "INSERT IGNORE INTO intruder_settings (id, enabled, interval_minutes, bot_user_id, bot_name, bot_avatar_url) VALUES (1, 0, 5, ?, 'Intruder', '/assets/intruder-bot.png')",
     [intruderBotId]
   );
+
+  const [quizBotRows] = await pool.query("SELECT id FROM users WHERE LOWER(username) = 'quiz bot' LIMIT 1");
+  let quizBotId = quizBotRows[0]?.id;
+  if (!quizBotId) {
+    const quizHash = await bcrypt.hash(`quiz-bot-${Date.now()}`, 10);
+    const quizEmail = await unusedAdminEmail("quiz-bot@teens-town.local");
+    const [quizResult] = await pool.query(
+      `INSERT INTO users
+       (username, email, password_hash, dob, age, gender, rank_name, display_name, avatar_url, bio, about_me, xp, gold, diamonds, ip_address, country, frame, theme, chat_background, profile_status, show_online_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["Quiz Bot", quizEmail, quizHash, "2007-01-01", 19, "other", "bot", "Quiz Bot", "/assets/quiz-bot.svg", "TeenChatTown live quiz host.", "Runs the permanent Quiz Room and official Quiz Contest.", 0, 0, 0, "system", "Teen Chat Town", "clean", "dark", "arc-grid", "Invisible", 0]
+    );
+    quizBotId = quizResult.insertId;
+  } else {
+    await pool.query("UPDATE users SET rank_name='bot', display_name='Quiz Bot', avatar_url='/assets/quiz-bot.svg', profile_status='Invisible', show_online_status=0 WHERE id=?", [quizBotId]);
+  }
   await pool.query(
     "UPDATE intruder_settings SET bot_user_id = ? WHERE id = 1",
     [intruderBotId]
