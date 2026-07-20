@@ -95,6 +95,10 @@ if (compression) app.use(compression());
 app.use(express.json({ limit: "6mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(attachUser);
+app.get("/realtime-client.js", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+  res.sendFile(path.join(__dirname, "node_modules", "socket.io", "client-dist", "socket.io.min.js"));
+});
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), staticOptions("30d")));
 app.use("/assets", express.static(path.join(__dirname, "public", "assets"), staticOptions("30d")));
 app.use(express.static(path.join(__dirname, "public"), staticOptions("1d")));
