@@ -1029,13 +1029,13 @@ function loadQuizGame() {
     if (link) return resolve();
     link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "/quiz.css?v=20260719-quiz-v1";
+    link.href = "/quiz.css?v=20260720-quiz-v2";
     link.dataset.quizStyle = "1";
     link.addEventListener("load", resolve, { once: true });
     link.addEventListener("error", resolve, { once: true });
     document.head.appendChild(link);
   });
-  quizGameLoadPromise = Promise.all([cssReady, import("/quiz.js?v=20260719-quiz-v1")])
+  quizGameLoadPromise = Promise.all([cssReady, import("/quiz.js?v=20260720-quiz-v2")])
     .then(() => window.QuizGame)
     .catch((error) => { quizGameLoadPromise = null; throw error; });
   return quizGameLoadPromise;
