@@ -25,7 +25,7 @@
       <section class="quiz-game-grid">
         <article class="quiz-feature-card room-card-game">
           <div class="quiz-card-art"><img src="/assets/quiz-bot.svg" alt="" /></div>
-          <div><span class="eyebrow">Always live</span><h3>Quiz Room</h3><p>Type answers in the room, race the ten-second clock, build streaks, and climb the live Quiz Leaderboard.</p><div class="quiz-feature-meta"><span>Up to 100 points</span><span>Server timed</span><span>Everyone plays</span></div><button class="primary" data-open-quiz-room type="button">Enter Quiz Room</button>${roomControls}</div>
+          <div><span class="eyebrow">Always live</span><h3>Quiz Room</h3><p>Type answers in the room, race the fifteen-second clock, build streaks, and climb the live Quiz Leaderboard.</p><div class="quiz-feature-meta"><span>100 points in first 3s</span><span>Server timed</span><span>Everyone plays</span></div><button class="primary" data-open-quiz-room type="button">Enter Quiz Room</button>${roomControls}</div>
         </article>
         <article class="quiz-feature-card contest-card-game">
           <div class="quiz-card-art bracket"><b>8</b><i></i><strong>1</strong></div>

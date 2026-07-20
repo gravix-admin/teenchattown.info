@@ -106,7 +106,8 @@ router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 20), 80);
   const cacheKey = `${Number(req.params.roomId)}:${limit}`;
   const cached = roomMessageCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  const forceFresh = String(req.query.fresh || "") === "1";
+  if (!forceFresh && cached && cached.expiresAt > Date.now()) {
     res.set("X-TCT-Message-Cache", "HIT");
     return res.json(cached.rows);
   }
@@ -146,6 +147,7 @@ router.get("/rooms/:roomId/messages", requireAuth, requireRoomAccess, async (req
 });
 
 router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.single("attachment"), async (req, res) => {
+  const receivedAtMs = Date.now();
   if (muted(req.user)) return res.status(403).json({ error: "You are muted and cannot chat or send PMs." });
   if (req.file && !(await hasTool(req.user, "sendFiles"))) return res.status(403).json({ error: "Your rank cannot send files." });
   let body = String(req.body.body || "").trim().slice(0, 1200);
@@ -212,7 +214,7 @@ router.post("/rooms/:roomId/messages", requireAuth, requireRoomAccess, upload.si
   if (Number(req.params.roomId) === quizService.getQuizRoomId()) emitSocketRoom(`quiz:room:${quizService.getQuizRoomId()}`, "message", message);
   else broadcast("message", message);
   res.status(201).json(message);
-  quizService.handleRoomMessage(req.params.roomId, message, req.user).catch((error) => {
+  quizService.handleRoomMessage(req.params.roomId, message, req.user, { receivedAtMs }).catch((error) => {
     if (error.code !== "QUIZ_RATE_LIMIT") console.error("[quiz answer] processing failed:", error.message);
   });
   (async () => {

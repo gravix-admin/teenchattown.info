@@ -78,6 +78,7 @@ const state = {
   syncing: false,
   lastSyncAt: 0,
   hiddenAt: 0,
+  lastAfkSyncAt: 0,
   newsCache: persistedNews?.data || null,
   newsCacheAt: Number(persistedNews?.at || 0),
   leaderboardCache: persistedLeaderboards || {},
@@ -1289,10 +1290,10 @@ function openRoomPasswordModal(room) {
   if (!$("#userActionModal").open) $("#userActionModal").showModal();
 }
 
-async function loadMessages() {
+async function loadMessages({ fresh = false } = {}) {
   if (!state.currentRoomId) return;
   try {
-    state.messages = await api(`/api/chat/rooms/${state.currentRoomId}/messages?limit=30`);
+    state.messages = await api(`/api/chat/rooms/${state.currentRoomId}/messages?limit=30${fresh ? "&fresh=1" : ""}`);
     renderMessages();
   } catch (error) {
     const room = state.rooms.find((item) => Number(item.id) === Number(state.currentRoomId));
@@ -1398,13 +1399,15 @@ function renderMessages() {
     const paintQuizRoomTimers = () => {
       $$('[data-quiz-room-countdown]', container).forEach((node) => {
         const remainingMs = Math.max(0, new Date(node.dataset.quizRoomCountdown).getTime() - Date.now());
-        const elapsedMs = Math.max(0, 10000 - remainingMs);
-        const points = Math.max(60, 100 - Math.floor(elapsedMs / 2000) * 10);
-        node.textContent = remainingMs > 0 ? `${Math.ceil(remainingMs / 1000)}s · ${points} pts` : "Round closed";
+        const durationMs = Math.max(5000, Number(node.dataset.quizRoomDurationMs || 15000));
+        const elapsedMs = Math.max(0, durationMs - remainingMs);
+        const points = elapsedMs <= 3000 ? 100 : Math.max(60, 90 - Math.floor((elapsedMs - 3000) / 2000) * 10);
+        const nextText = remainingMs > 0 ? `${Math.ceil(remainingMs / 1000)}s · ${points} pts` : "Round closed";
+        if (node.textContent !== nextText) node.textContent = nextText;
       });
     };
     paintQuizRoomTimers();
-    state.quizRoomTicker = setInterval(paintQuizRoomTimers, 250);
+    state.quizRoomTicker = setInterval(paintQuizRoomTimers, 500);
   }
 }
 
@@ -1481,7 +1484,7 @@ function renderMessageBody(body, user = {}) {
     try {
       const payload = JSON.parse(body.slice(quizPrefix.length));
       const type = String(payload?.type || "question");
-      if (type === "question") return `<div class="quiz-message-card"><small>${html(payload.category || "Quiz Room")} &middot; Question ${Number(payload.questionNumber || payload.number || 0)}</small><strong>${html(payload.question || "Get ready...")}</strong><span>${html(payload.hint || "Type your answer in chat")}</span><b data-quiz-room-countdown="${html(payload.expiresAt || "")}">${Number(payload.durationSeconds || 10)}s &middot; ${Number(payload.maximumPoints || 100)} pts</b></div>`;
+      if (type === "question") return `<div class="quiz-message-card"><small>${html(payload.category || "Quiz Room")} &middot; Question ${Number(payload.questionNumber || payload.number || 0)}</small><strong>${html(payload.question || "Get ready...")}</strong><span>${html(payload.hint || "Type your answer in chat")}</span><b data-quiz-room-countdown="${html(payload.expiresAt || "")}" data-quiz-room-duration-ms="${Math.max(5000, Number(payload.durationSeconds || 15) * 1000)}">${Number(payload.durationSeconds || 15)}s &middot; ${Number(payload.maximumPoints || 100)} pts</b></div>`;
       if (type === "winner") return `<div class="quiz-message-card quiz-result"><small>Correct answer</small><strong>${html(payload.username || "A player")} wins ${compactNumber(payload.points || 0)} points</strong><span>${html(payload.answer || "")} &middot; ${(Number(payload.speedMs || payload.responseMs || 0) / 1000).toFixed(1)}s response</span></div>`;
       if (type === "expired") return `<div class="quiz-message-card quiz-expired"><small>Time expired</small><strong>No correct answer this round</strong><span>Answer: ${html(payload.answer || "Not revealed")}</span></div>`;
       if (type === "paused") return '<div class="quiz-message-card quiz-expired"><strong>Quiz Room paused by the Developer</strong><span>The current score and question are safely frozen.</span></div>';
@@ -4488,7 +4491,7 @@ async function refreshVisibleData({ force = false } = {}) {
     const results = await Promise.allSettled([
       force || Date.now() - Number(state.usersCacheAt || 0) > 45000 ? refreshUsersLight() : Promise.resolve(),
       $("#chatView").classList.contains("active") && (force || !state.messages.length || (!state.socket?.connected && !state.eventSource))
-        ? loadMessages()
+        ? loadMessages({ fresh: force })
         : Promise.resolve(),
       force || Date.now() - Number(state.pmUnreadCacheAt || 0) > 30000 ? refreshPmUnread() : Promise.resolve(),
       force || Date.now() - Number(state.friendsCacheAt || 0) > 60000 ? loadFriends() : Promise.resolve(),
@@ -4509,6 +4512,20 @@ async function refreshVisibleData({ force = false } = {}) {
 function handleReturnToPage() {
   if (document.hidden) {
     state.hiddenAt = Date.now();
+    return;
+  }
+  const now = Date.now();
+  const awayMs = state.hiddenAt ? now - state.hiddenAt : 0;
+  state.hiddenAt = 0;
+  if (awayMs >= 10000 && now - state.lastAfkSyncAt >= 5000) {
+    state.lastAfkSyncAt = now;
+    state.socket?.connected && state.socket.emit("presence");
+    const quizRoom = state.rooms.find((room) => String(room.name || "").toLowerCase() === "quiz room");
+    if (state.socket?.connected && Number(state.currentRoomId) === Number(quizRoom?.id)) {
+      state.socket.emit("quiz:unsubscribe", { roomId: quizRoom.id });
+      state.socket.emit("quiz:subscribe", { roomId: quizRoom.id });
+    }
+    refreshVisibleData({ force: true }).catch(() => {});
     return;
   }
   refreshVisibleData().catch(() => {});
@@ -5033,6 +5050,8 @@ function bindEvents() {
   $("#cancelDeleteButton").addEventListener("click", async () => alert((await api("/api/auth/me/cancel-delete", { method: "POST" })).message));
   document.addEventListener("visibilitychange", handleReturnToPage);
   window.addEventListener("focus", handleReturnToPage);
+  window.addEventListener("pageshow", handleReturnToPage);
+  window.addEventListener("online", handleReturnToPage);
   $("#imageLightbox")?.addEventListener("click", (event) => {
     if (event.target.closest("[data-close-lightbox]") || event.target.id === "imageLightbox") closeImageZoom();
   });

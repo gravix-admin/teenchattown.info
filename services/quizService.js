@@ -3,7 +3,7 @@ const { emitSocketRoom, notifySocketUser } = require("./events");
 const { generateQuestion, generateContestSet, publicQuestion, answerMatches } = require("./quizQuestionEngine");
 
 const QUIZ_PREFIX = "[[QUIZ]]";
-const ROOM_DURATION_MS = Math.max(5000, Math.min(30000, Number(process.env.QUIZ_ROOM_QUESTION_SECONDS || 10) * 1000));
+const ROOM_DURATION_MS = Math.max(5000, Math.min(30000, Number(process.env.QUIZ_ROOM_QUESTION_SECONDS || 15) * 1000));
 const NEXT_DELAY_MS = Math.max(500, Math.min(10000, Number(process.env.QUIZ_NEXT_QUESTION_DELAY_MS || 2000)));
 const CONTEST_DURATION_MS = Math.max(5000, Math.min(30000, Number(process.env.QUIZ_CONTEST_QUESTION_SECONDS || 10) * 1000));
 const JOIN_GRACE_MS = Math.max(15000, Math.min(10 * 60 * 1000, Number(process.env.QUIZ_CONTEST_JOIN_GRACE_SECONDS || 60) * 1000));
@@ -23,7 +23,11 @@ function fail(message, status = 400, code = "QUIZ_ERROR") {
 function parseJson(value, fallback) { try { return JSON.parse(value || "") || fallback; } catch (_error) { return fallback; } }
 function nowIso() { return new Date().toISOString(); }
 function ms(value) { const result = new Date(value).getTime(); return Number.isFinite(result) ? result : 0; }
-function roomPoints(elapsedMs) { return Math.max(60, 100 - Math.floor(Math.max(0, elapsedMs) / 2000) * 10); }
+function roomPoints(elapsedMs) {
+  const elapsed = Math.max(0, Number(elapsedMs) || 0);
+  if (elapsed <= 3000) return 100;
+  return Math.max(60, 90 - Math.floor((elapsed - 3000) / 2000) * 10);
+}
 function contestPoints(elapsedMs) { return Math.max(2, 20 - Math.floor(Math.max(0, elapsedMs) / 1000) * 2); }
 
 function serialize(work) {
@@ -64,7 +68,7 @@ function roomPublic(row) {
 
 async function roomState() { return roomPublic(await activeRoomQuestion()); }
 
-async function recentQuestionKeys(limit = 80) {
+async function recentQuestionKeys(limit = 180) {
   const [rows] = await pool.query("SELECT question_key FROM quiz_question_history ORDER BY used_at DESC LIMIT ?", [limit]);
   return rows.map((row) => row.question_key);
 }
@@ -132,7 +136,7 @@ function allowAnswer(userId) {
   window.push(now); answerWindows.set(id, window);
 }
 
-async function handleRoomMessage(roomId, message, user) {
+async function handleRoomMessage(roomId, message, user, { receivedAtMs = Date.now() } = {}) {
   if (!initialized || Number(roomId) !== Number(quizRoomId) || user.rank_name === "bot") return null;
   allowAnswer(user.id);
   const answerText = String(message.body || "").trim();
@@ -143,11 +147,11 @@ async function handleRoomMessage(roomId, message, user) {
     try {
       await connection.beginTransaction();
       [[session]] = await connection.query("SELECT * FROM quiz_room_sessions WHERE room_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1 FOR UPDATE", [quizRoomId]);
-      if (!session || Date.now() > ms(session.expires_at)) { await connection.rollback(); return null; }
+      if (!session || receivedAtMs > ms(session.expires_at)) { await connection.rollback(); return null; }
       const [[duplicate]] = await connection.query("SELECT id FROM quiz_room_answers WHERE message_id = ? LIMIT 1", [message.id]);
       if (duplicate) { await connection.rollback(); return null; }
       question = parseJson(session.question_json, {});
-      responseMs = Math.max(0, Date.now() - ms(session.started_at));
+      responseMs = Math.max(0, receivedAtMs - ms(session.started_at));
       correct = answerMatches(question, answerText);
       if (correct) {
         points = roomPoints(responseMs);
