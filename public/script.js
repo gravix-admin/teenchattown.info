@@ -102,6 +102,8 @@ const state = {
   activeXoGameId: null,
   xoExpiryTimer: null,
   quizRoomTicker: null,
+  quizRoomFallbackTimer: null,
+  quizRoomFallbackSessionId: 0,
   voiceRecorder: null,
   voiceStream: null,
   voiceChunks: [],
@@ -1259,9 +1261,7 @@ async function switchRoom(roomId) {
   }
   state.currentRoomId = roomId;
   localStorage.setItem("tct_current_room_id", String(roomId));
-  if (String(room.name || "").toLowerCase() === "quiz room" && state.socket?.connected) {
-    state.socket.emit("quiz:subscribe", { roomId: room.id });
-  }
+  syncQuizRoomRealtime();
   $("#drawer").classList.add("hidden");
   setView("chat");
   renderRooms();
@@ -1285,9 +1285,7 @@ function openRoomPasswordModal(room) {
     $("#userActionModal").close();
     state.currentRoomId = room.id;
     localStorage.setItem("tct_current_room_id", String(room.id));
-    if (String(room.name || "").toLowerCase() === "quiz room" && state.socket?.connected) {
-      state.socket.emit("quiz:subscribe", { roomId: room.id });
-    }
+    syncQuizRoomRealtime();
     $("#drawer").classList.add("hidden");
     setView("chat");
     renderRooms();
@@ -1381,6 +1379,50 @@ function messageMarkup(message) {
         </div>
       </article>
     `;
+}
+
+function currentQuizRoom() {
+  return state.rooms.find((room) => String(room.name || "").toLowerCase() === "quiz room") || null;
+}
+
+function stopQuizRoomFallback() {
+  clearTimeout(state.quizRoomFallbackTimer);
+  state.quizRoomFallbackTimer = null;
+}
+
+function scheduleQuizRoomFallback(delay = 1500) {
+  if (state.quizRoomFallbackTimer || document.hidden || state.isGuest) return;
+  const quizRoom = currentQuizRoom();
+  if (!quizRoom || Number(state.currentRoomId) !== Number(quizRoom.id) || state.socket?.connected) return;
+  state.quizRoomFallbackTimer = setTimeout(async () => {
+    state.quizRoomFallbackTimer = null;
+    if (document.hidden || state.socket?.connected || Number(state.currentRoomId) !== Number(quizRoom.id)) return;
+    try {
+      const quizState = await api("/api/quiz/state", { cache: `quiz-room-fallback-${Date.now()}` });
+      const sessionId = Number(quizState?.sessionId || 0);
+      if (sessionId && sessionId !== Number(state.quizRoomFallbackSessionId || 0)) {
+        state.quizRoomFallbackSessionId = sessionId;
+        await loadMessages({ fresh: true });
+      }
+    } catch (_error) {}
+    scheduleQuizRoomFallback(5000);
+  }, delay);
+}
+
+function syncQuizRoomRealtime() {
+  const quizRoom = currentQuizRoom();
+  const quizIsCurrent = quizRoom && Number(state.currentRoomId) === Number(quizRoom.id);
+  if (!quizIsCurrent) {
+    stopQuizRoomFallback();
+    state.quizRoomFallbackSessionId = 0;
+    return;
+  }
+  if (state.socket?.connected) {
+    stopQuizRoomFallback();
+    state.socket.emit("quiz:subscribe", { roomId: quizRoom.id });
+    return;
+  }
+  scheduleQuizRoomFallback();
 }
 
 function renderMessages() {
@@ -4475,6 +4517,7 @@ function connectEvents() {
       state.socket.emit("presence");
       const quizRoom = state.rooms.find((room) => String(room.name).toLowerCase() === "quiz room");
       if (!state.isGuest && Number(state.currentRoomId) === Number(quizRoom?.id)) state.socket.emit("quiz:subscribe", { roomId: quizRoom.id });
+      stopQuizRoomFallback();
       if (!state.isGuest && window.QuizGame?.isOpen?.()) state.socket.emit("quiz:subscribe", { contest: true });
       clearInterval(state.presenceTimer);
       state.presenceTimer = setInterval(() => state.socket?.connected && state.socket.emit("presence"), 45000);
@@ -4486,6 +4529,7 @@ function connectEvents() {
         return;
       }
       console.warn("Live connection interrupted; Socket.IO is reconnecting.", error.message);
+      syncQuizRoomRealtime();
     });
     return;
   }
@@ -4533,6 +4577,7 @@ function handleReturnToPage() {
   const now = Date.now();
   const awayMs = state.hiddenAt ? now - state.hiddenAt : 0;
   state.hiddenAt = 0;
+  syncQuizRoomRealtime();
   if (awayMs >= 10000 && now - state.lastAfkSyncAt >= 5000) {
     state.lastAfkSyncAt = now;
     state.socket?.connected && state.socket.emit("presence");

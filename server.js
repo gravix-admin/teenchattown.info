@@ -43,7 +43,7 @@ const configuredOrigins = new Set(
     .map((value) => String(value).replace(/\/$/, ""))
 );
 function socketOriginAllowed(origin) {
-  if (!origin) return !isProduction;
+  if (!origin) return true;
   if (!isProduction && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
   return configuredOrigins.has(String(origin).replace(/\/$/, ""));
 }
