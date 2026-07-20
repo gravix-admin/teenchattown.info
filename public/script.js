@@ -1259,6 +1259,9 @@ async function switchRoom(roomId) {
   }
   state.currentRoomId = roomId;
   localStorage.setItem("tct_current_room_id", String(roomId));
+  if (String(room.name || "").toLowerCase() === "quiz room" && state.socket?.connected) {
+    state.socket.emit("quiz:subscribe", { roomId: room.id });
+  }
   $("#drawer").classList.add("hidden");
   setView("chat");
   renderRooms();
@@ -1282,6 +1285,9 @@ function openRoomPasswordModal(room) {
     $("#userActionModal").close();
     state.currentRoomId = room.id;
     localStorage.setItem("tct_current_room_id", String(room.id));
+    if (String(room.name || "").toLowerCase() === "quiz room" && state.socket?.connected) {
+      state.socket.emit("quiz:subscribe", { roomId: room.id });
+    }
     $("#drawer").classList.add("hidden");
     setView("chat");
     renderRooms();
@@ -1409,6 +1415,24 @@ function renderMessages() {
     paintQuizRoomTimers();
     state.quizRoomTicker = setInterval(paintQuizRoomTimers, 500);
   }
+}
+
+function confirmOptimisticMessage(pendingId, message) {
+  const pendingIndex = state.messages.findIndex((item) => String(item.id) === String(pendingId));
+  if (pendingIndex < 0) return false;
+  state.messages[pendingIndex] = message;
+  const container = $("#messages");
+  const pendingNode = container?.querySelector(`[data-message-id="${pendingId}"]`);
+  if (!pendingNode) {
+    renderMessages();
+    return true;
+  }
+  pendingNode.insertAdjacentHTML("afterend", messageMarkup(message));
+  const confirmedNode = pendingNode.nextElementSibling;
+  pendingNode.remove();
+  if (confirmedNode) bindMessageActions(confirmedNode);
+  container.scrollTop = container.scrollHeight;
+  return true;
 }
 
 function renderIntruderMessage(payload) {
@@ -4160,7 +4184,7 @@ const realtimeHandlers = {
     if (state.messages.some((item) => Number(item.id) === Number(message.id))) return;
     if (Number(message.user_id) === Number(state.me.id)) {
       const pending = state.messages.find((item) => item.pending && item.body === message.body);
-      if (pending) state.messages = state.messages.filter((item) => item !== pending);
+      if (pending && confirmOptimisticMessage(pending.id, message)) return;
     }
     state.messages.push(message);
     if (state.messages.length > 60) state.messages = state.messages.slice(-60);
@@ -4796,7 +4820,7 @@ function bindEvents() {
     const submitButton = $("#messageForm button[type='submit']");
     const roomId = state.currentRoomId;
     const replyToId = state.replyToId;
-    const isBotCommand = /^\/(?:bet|confess|ship|steal|hunt)(?:\s|$)/i.test(body);
+    const isBotCommand = /^\/(?:bet|confess|ship|steal|hunt|roast)(?:\s|$)/i.test(body);
     const optimistic = Boolean(body && !state.uploadFile && body.toLowerCase() !== "/clear" && !isBotCommand);
     const pendingId = `pending-${Date.now()}`;
     state.sendingMessage = true;
@@ -4810,10 +4834,15 @@ function bindEvents() {
         toast("Room cleared.");
         return;
       }
-      const form = new FormData();
-      form.append("body", body);
-      if (replyToId) form.append("replyToId", replyToId);
-      if (state.uploadFile) form.append("attachment", state.uploadFile);
+      let requestBody;
+      if (state.uploadFile) {
+        requestBody = new FormData();
+        requestBody.append("body", body);
+        if (replyToId) requestBody.append("replyToId", replyToId);
+        requestBody.append("attachment", state.uploadFile);
+      } else {
+        requestBody = JSON.stringify({ body, replyToId: replyToId || null });
+      }
       if (optimistic) {
         state.messages.push({
           id: pendingId,
@@ -4836,11 +4865,13 @@ function bindEvents() {
         $("#charCount").textContent = "0/1200";
         renderMessages();
       }
-      const sent = await api(`/api/chat/rooms/${roomId}/messages`, { method: "POST", body: form });
+      const sent = await api(`/api/chat/rooms/${roomId}/messages`, { method: "POST", body: requestBody });
       if (Number(state.currentRoomId) === Number(roomId)) {
-        state.messages = state.messages.filter((message) => message.id !== pendingId && (!sent.id || Number(message.id) !== Number(sent.id)));
-        if (!sent.private) state.messages.push(sent);
-        renderMessages();
+        const alreadyConfirmed = sent.id && state.messages.some((message) => Number(message.id) === Number(sent.id));
+        if (!sent.private && !alreadyConfirmed && !confirmOptimisticMessage(pendingId, sent)) {
+          state.messages.push(sent);
+          renderMessages();
+        }
       }
       if (!sent.private && String(sent.body || "").startsWith(betPrefix)) {
         try {
