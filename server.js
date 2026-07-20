@@ -224,6 +224,15 @@ if (io) {
         socket.emit("contest:state", await quizService.contestState(socket.user).catch(() => null));
       }
     });
+    socket.on("quiz:answer", async (data = {}, acknowledge) => {
+      const reply = typeof acknowledge === "function" ? acknowledge : () => {};
+      try {
+        const message = await quizService.submitRoomMessage(data.roomId, socket.user, data.body);
+        reply({ ok: true, message });
+      } catch (error) {
+        reply({ ok: false, code: error.code || "QUIZ_ANSWER_FAILED", error: error.message || "Answer could not be sent." });
+      }
+    });
     socket.on("quiz:unsubscribe", (data = {}) => {
       const roomId = Number(data.roomId || 0);
       if (roomId === quizService.getQuizRoomId()) socket.leave(`quiz:room:${roomId}`);

@@ -7,6 +7,7 @@ const ROOM_DURATION_MS = Math.max(5000, Math.min(30000, Number(process.env.QUIZ_
 const NEXT_DELAY_MS = Math.max(500, Math.min(10000, Number(process.env.QUIZ_NEXT_QUESTION_DELAY_MS || 2000)));
 const CONTEST_DURATION_MS = Math.max(5000, Math.min(30000, Number(process.env.QUIZ_CONTEST_QUESTION_SECONDS || 10) * 1000));
 const JOIN_GRACE_MS = Math.max(15000, Math.min(10 * 60 * 1000, Number(process.env.QUIZ_CONTEST_JOIN_GRACE_SECONDS || 60) * 1000));
+const RECENT_QUESTION_WINDOW = Math.max(500, Math.min(10000, Number(process.env.QUIZ_RECENT_QUESTION_WINDOW || 6000)));
 
 let quizRoomId = null;
 let quizBot = null;
@@ -15,6 +16,9 @@ let roomNextTimer = null;
 let roomQueue = Promise.resolve();
 const matchTimers = new Map();
 const answerWindows = new Map();
+const recentQuestionKeyQueue = [];
+const recentQuestionKeySet = new Set();
+let recentQuestionCacheReady = false;
 let initialized = false;
 
 function fail(message, status = 400, code = "QUIZ_ERROR") {
@@ -68,9 +72,26 @@ function roomPublic(row) {
 
 async function roomState() { return roomPublic(await activeRoomQuestion()); }
 
-async function recentQuestionKeys(limit = 180) {
-  const [rows] = await pool.query("SELECT question_key FROM quiz_question_history ORDER BY used_at DESC LIMIT ?", [limit]);
-  return rows.map((row) => row.question_key);
+function rememberQuestionKey(questionKey) {
+  const key = String(questionKey || "");
+  if (!key || recentQuestionKeySet.has(key)) return;
+  recentQuestionKeyQueue.push(key);
+  recentQuestionKeySet.add(key);
+  while (recentQuestionKeyQueue.length > RECENT_QUESTION_WINDOW) {
+    recentQuestionKeySet.delete(recentQuestionKeyQueue.shift());
+  }
+}
+
+async function hydrateRecentQuestionKeys() {
+  if (recentQuestionCacheReady) return;
+  const [rows] = await pool.query("SELECT question_key FROM quiz_question_history ORDER BY used_at DESC LIMIT ?", [RECENT_QUESTION_WINDOW]);
+  for (const row of rows.reverse()) rememberQuestionKey(row.question_key);
+  recentQuestionCacheReady = true;
+}
+
+async function recentQuestionKeys(limit = RECENT_QUESTION_WINDOW) {
+  await hydrateRecentQuestionKeys();
+  return recentQuestionKeyQueue.slice(-Math.max(1, Number(limit) || RECENT_QUESTION_WINDOW));
 }
 
 function clearRoomTimers() { clearTimeout(roomTimer); clearTimeout(roomNextTimer); roomTimer = null; roomNextTimer = null; }
@@ -93,6 +114,7 @@ async function startRoomQuestion() {
     [quizRoomId, question.id, question.sourceKey, Number(counter.next_number), question.category, JSON.stringify(question), startedAt, expiresAt]
   );
   await pool.query("INSERT INTO quiz_question_history (question_id, question_key, category) VALUES (?, ?, ?)", [question.id, question.sourceKey, question.category]);
+  rememberQuestionKey(question.sourceKey);
   const [[row]] = await pool.query("SELECT * FROM quiz_room_sessions WHERE id = ?", [result.insertId]);
   await botMessage({ type: "question", category: question.category, question: question.question, hint: question.hint, durationSeconds: ROOM_DURATION_MS / 1000, maximumPoints: 100, questionNumber: Number(row.question_number), sessionId: Number(row.id), expiresAt: row.expires_at });
   emitSocketRoom(`quiz:room:${quizRoomId}`, "quiz:question_started", roomPublic(row));
@@ -186,6 +208,44 @@ async function handleRoomMessage(roomId, message, user, { receivedAtMs = Date.no
     roomNextTimer.unref?.();
     return { correct: true, points };
   });
+}
+
+async function submitRoomMessage(roomId, user, rawBody) {
+  const receivedAtMs = Date.now();
+  if (!initialized || Number(roomId) !== Number(quizRoomId)) throw fail("Quiz Room is unavailable.", 404, "QUIZ_ROOM_NOT_FOUND");
+  if (!user || user.isGuest || user.rank_name === "bot") throw fail("Create an account to answer Quiz Room questions.", 403, "REGISTERED_ONLY");
+  const body = String(rawBody || "").trim().slice(0, 1200);
+  if (!body) throw fail("Type an answer first.", 400, "QUIZ_ANSWER_REQUIRED");
+  if (body.startsWith("/")) throw fail("Commands use the regular message route.", 400, "QUIZ_COMMAND_UNSUPPORTED");
+  const [result] = await pool.query(
+    `INSERT INTO messages (room_id, user_id, body)
+     SELECT ?, id, ? FROM users
+     WHERE id = ?
+       AND (muted_until IS NULL OR muted_until <= UTC_TIMESTAMP())
+       AND (kicked_until IS NULL OR kicked_until <= UTC_TIMESTAMP())
+       AND (banned_until IS NULL OR banned_until <= UTC_TIMESTAMP())`,
+    [quizRoomId, body, user.id]
+  );
+  if (!result.affectedRows) throw fail("You cannot send messages right now.", 403, "CHAT_RESTRICTED");
+  const message = {
+    id: result.insertId, room_id: Number(quizRoomId), user_id: Number(user.id), body,
+    attachment_url: null, attachment_type: null, reply_to_id: null, is_pinned: 0, created_at: new Date(),
+    username: user.username, rank_name: user.rank_name, profile_title: user.profile_title,
+    avatar_url: user.avatar_url, username_color: user.username_color, text_color: user.text_color,
+    bubble_style: user.bubble_style, frame: user.frame,
+  };
+  emitSocketRoom(`quiz:room:${quizRoomId}`, "message", message);
+  handleRoomMessage(quizRoomId, message, user, { receivedAtMs }).catch((error) => {
+    if (error.code !== "QUIZ_RATE_LIMIT") console.error("[quiz socket answer] processing failed:", error.message);
+  });
+  (async () => {
+    await pool.query("UPDATE users SET message_count = message_count + 1, xp = xp + IF((message_count + 1) % 2 = 0, 1, 0), gold = gold + IF((message_count + 1) % 10 = 0, 100, 0) WHERE id = ?", [user.id]);
+    await Promise.all([
+      pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'first_message'", [user.id]),
+      pool.query("INSERT IGNORE INTO user_achievements (user_id, achievement_id) SELECT ?, id FROM achievements WHERE code = 'ten_messages' AND (SELECT message_count FROM users WHERE id = ?) >= 10", [user.id, user.id]),
+    ]);
+  })().catch((error) => console.error("[quiz socket rewards] update failed:", error.message));
+  return message;
 }
 
 async function pauseRoomQuestion(actorUserId) {
@@ -684,7 +744,7 @@ function getQuizRoomId() { return Number(quizRoomId || 0); }
 
 module.exports = {
   QUIZ_PREFIX, ROOM_DURATION_MS, NEXT_DELAY_MS, roomPoints, contestPoints, getQuizRoomId,
-  initialize, roomState, handleRoomMessage, leaderboard, stats, contestState, matchState,
+  initialize, roomState, handleRoomMessage, submitRoomMessage, leaderboard, stats, contestState, matchState,
   prepareContest, lockContest, joinContest, startTournament, startNextRound, answerContestMatch,
   pauseContest, resumeContest, cancelContest, resetContest, disqualifyPlayer, replacePlayer,
   expireRoomQuestion, pauseRoomQuestion, resumeRoomQuestion, skipContestQuestion, contestLogs,

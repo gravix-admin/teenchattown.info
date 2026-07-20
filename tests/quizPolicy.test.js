@@ -52,6 +52,28 @@ test("a contest set has twenty unique four-option questions", () => {
   });
 });
 
+test("generated questions keep the requested 50/30/20 difficulty balance", () => {
+  const questions = Array.from({ length: 100 }, () => generateQuestion({}));
+  const counts = questions.reduce((result, question) => {
+    result[question.difficulty] = Number(result[question.difficulty] || 0) + 1;
+    return result;
+  }, {});
+  assert.deepEqual(counts, { easy: 50, moderate: 30, difficult: 20 });
+});
+
+test("the procedural pool can serve a thousand fresh questions without repeats", () => {
+  const questions = [];
+  const recentKeys = [];
+  for (let index = 0; index < 1000; index += 1) {
+    const question = generateQuestion({ contest: true, recentKeys });
+    questions.push(question);
+    recentKeys.push(question.sourceKey);
+  }
+  assert.equal(new Set(recentKeys).size, 1000);
+  const mathsAndScience = questions.filter((question) => ["Mathematics", "Algebra", "Geometry", "Physics", "Chemistry", "Space Science", "Science"].includes(question.category));
+  assert.ok(mathsAndScience.length >= 750);
+});
+
 test("the question bank has broad science, reasoning, and general knowledge coverage", () => {
   const counts = FACTS.reduce((result, [category]) => {
     result[category] = Number(result[category] || 0) + 1;

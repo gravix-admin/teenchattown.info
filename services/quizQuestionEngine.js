@@ -153,7 +153,7 @@ function hintFor(answer, type) {
   return String(answer).split(" ").map((word) => word.split("").map((letter, index) => index === 0 ? letter : "_").join(" ")).join("   ");
 }
 
-function baseQuestion({ category, difficulty = "medium", question, answer, acceptedAnswers = [], answerType = "word", options = [], durationMs = 10000, sourceKey = "" }) {
+function baseQuestion({ category, difficulty = "easy", question, answer, acceptedAnswers = [], answerType = "word", options = [], durationMs = 10000, sourceKey = "" }) {
   const accepted = [answer, ...acceptedAnswers].filter(Boolean);
   const uniqueChoices = [];
   for (const option of [answer, ...options]) {
@@ -168,10 +168,10 @@ function baseQuestion({ category, difficulty = "medium", question, answer, accep
   };
 }
 
-function factQuestion(categoryName = "") {
+function factQuestion(difficulty = "easy", categoryName = "") {
   const pool = categoryName ? FACTS.filter(([category]) => category === categoryName) : FACTS;
   const [category, question, answer, wrong, answerType, equivalents = []] = pick(pool.length ? pool : FACTS);
-  return baseQuestion({ category, question, answer, acceptedAnswers: equivalents, answerType, options: wrong });
+  return baseQuestion({ category, difficulty, question, answer, acceptedAnswers: equivalents, answerType, options: wrong });
 }
 
 function mathQuestion() {
@@ -216,7 +216,199 @@ function mathQuestion() {
   return baseQuestion({ category: "Pattern Recognition", question: `What comes next: ${sequence.join(", ")}, ?`, answer, answerType: "number", options: [answer - step, answer + step, answer + 2], sourceKey: `sequence:${start}:${step}` });
 }
 
-function scrambleQuestion() {
+const ELEMENTS = [
+  ["Hydrogen", "H", 1], ["Helium", "He", 2], ["Lithium", "Li", 3], ["Beryllium", "Be", 4],
+  ["Boron", "B", 5], ["Carbon", "C", 6], ["Nitrogen", "N", 7], ["Oxygen", "O", 8],
+  ["Fluorine", "F", 9], ["Neon", "Ne", 10], ["Sodium", "Na", 11], ["Magnesium", "Mg", 12],
+  ["Aluminium", "Al", 13], ["Silicon", "Si", 14], ["Phosphorus", "P", 15], ["Sulfur", "S", 16],
+  ["Chlorine", "Cl", 17], ["Argon", "Ar", 18], ["Potassium", "K", 19], ["Calcium", "Ca", 20],
+  ["Scandium", "Sc", 21], ["Titanium", "Ti", 22], ["Vanadium", "V", 23], ["Chromium", "Cr", 24],
+  ["Manganese", "Mn", 25], ["Iron", "Fe", 26], ["Cobalt", "Co", 27], ["Nickel", "Ni", 28],
+  ["Copper", "Cu", 29], ["Zinc", "Zn", 30], ["Gallium", "Ga", 31], ["Germanium", "Ge", 32],
+  ["Arsenic", "As", 33], ["Selenium", "Se", 34], ["Bromine", "Br", 35], ["Krypton", "Kr", 36],
+  ["Rubidium", "Rb", 37], ["Strontium", "Sr", 38], ["Silver", "Ag", 47], ["Tin", "Sn", 50],
+  ["Iodine", "I", 53], ["Xenon", "Xe", 54], ["Cesium", "Cs", 55], ["Barium", "Ba", 56],
+  ["Tungsten", "W", 74], ["Platinum", "Pt", 78], ["Gold", "Au", 79], ["Mercury", "Hg", 80],
+  ["Lead", "Pb", 82], ["Uranium", "U", 92],
+];
+
+const PHYSICS_UNITS = [
+  ["force", "newton", "N"], ["energy", "joule", "J"], ["power", "watt", "W"],
+  ["pressure", "pascal", "Pa"], ["electric current", "ampere", "A"], ["voltage", "volt", "V"],
+  ["resistance", "ohm", "ohm"], ["frequency", "hertz", "Hz"], ["electric charge", "coulomb", "C"],
+  ["magnetic flux density", "tesla", "T"], ["capacitance", "farad", "F"], ["inductance", "henry", "H"],
+];
+
+const PLANETS = [
+  ["Mercury", 1, 0], ["Venus", 2, 0], ["Earth", 3, 1], ["Mars", 4, 2],
+  ["Jupiter", 5, 95], ["Saturn", 6, 146], ["Uranus", 7, 28], ["Neptune", 8, 16],
+];
+
+const DIFFICULTY_CYCLE = ["easy", "moderate", "easy", "difficult", "easy", "moderate", "easy", "difficult", "easy", "moderate"];
+let difficultyIndex = randomInt(0, DIFFICULTY_CYCLE.length - 1);
+
+function nextDifficulty() {
+  const difficulty = DIFFICULTY_CYCLE[difficultyIndex % DIFFICULTY_CYCLE.length];
+  difficultyIndex += 1;
+  return difficulty;
+}
+
+function numericOptions(answer, spread = 4) {
+  const value = Number(answer);
+  const candidates = [value + spread, value - spread, value + spread * 2, value - spread * 2, value + 1, value - 1, value + 10, Math.max(0, value - 10), value * 2];
+  return [...new Set(candidates.filter((item) => Number.isFinite(item) && item !== value))].slice(0, 3);
+}
+
+function otherValues(items, answer, selector = (item) => item) {
+  return shuffle(items.map(selector).filter((item) => normalized(item) !== normalized(answer))).slice(0, 3);
+}
+
+function gcd(a, b) {
+  let left = Math.abs(a); let right = Math.abs(b);
+  while (right) [left, right] = [right, left % right];
+  return left;
+}
+
+function freshMathQuestion(difficulty = "easy") {
+  const modes = difficulty === "easy"
+    ? ["add", "subtract", "multiply", "divide", "fraction"]
+    : difficulty === "moderate"
+      ? ["percent", "sequence", "square", "average", "equation", "perimeter", "area", "ratio"]
+      : ["compound", "linear", "power", "gcd", "lcm", "increase", "ratioShare", "squareRoot"];
+  const mode = pick(modes);
+  let question; let answer; let sourceKey; let category = "Mathematics"; let spread = 4;
+
+  if (mode === "add") {
+    const a = randomInt(20, 999); const b = randomInt(20, 999); answer = a + b;
+    question = `What is ${a} + ${b}?`; sourceKey = `math:add:${a}:${b}`; spread = randomInt(2, 12);
+  } else if (mode === "subtract") {
+    const a = randomInt(100, 1500); const b = randomInt(10, a - 5); answer = a - b;
+    question = `What is ${a} - ${b}?`; sourceKey = `math:sub:${a}:${b}`; spread = randomInt(2, 12);
+  } else if (mode === "multiply") {
+    const a = randomInt(3, 35); const b = randomInt(3, 25); answer = a * b;
+    question = `What is ${a} × ${b}?`; sourceKey = `math:mul:${a}:${b}`; spread = Math.max(2, Math.min(a, b));
+  } else if (mode === "divide") {
+    answer = randomInt(3, 60); const divisor = randomInt(2, 25); const total = answer * divisor;
+    question = `What is ${total} ÷ ${divisor}?`; sourceKey = `math:div:${total}:${divisor}`; spread = randomInt(1, 6);
+  } else if (mode === "fraction") {
+    const denominator = pick([2, 3, 4, 5, 6, 8, 10]); const numerator = randomInt(1, denominator - 1); const unit = randomInt(2, 50); const total = denominator * unit; answer = numerator * unit;
+    question = `What is ${numerator}/${denominator} of ${total}?`; sourceKey = `math:fraction:${numerator}:${denominator}:${total}`; spread = unit;
+  } else if (mode === "percent") {
+    const percent = pick([5, 10, 12.5, 15, 20, 25, 30, 40, 50, 75]); const multiplier = Number.isInteger(percent) ? 100 : 200; const total = randomInt(1, 30) * multiplier; answer = total * percent / 100;
+    question = `What is ${percent}% of ${total}?`; sourceKey = `math:percent:${percent}:${total}`; spread = Math.max(2, total / 100);
+  } else if (mode === "sequence") {
+    const start = randomInt(1, 80); const step = randomInt(2, 24); const terms = [start, start + step, start + step * 2, start + step * 3]; answer = start + step * 4;
+    question = `What comes next: ${terms.join(", ")}, ?`; sourceKey = `math:sequence:${start}:${step}`; spread = step;
+  } else if (mode === "square") {
+    const value = randomInt(8, 45); answer = value * value; question = `What is ${value} squared?`; sourceKey = `math:square:${value}`; spread = value;
+  } else if (mode === "average") {
+    const middle = randomInt(10, 150); const step = randomInt(2, 30); answer = middle;
+    question = `What is the average of ${middle - step}, ${middle}, and ${middle + step}?`; sourceKey = `math:average:${middle}:${step}`; spread = step;
+  } else if (mode === "equation") {
+    answer = randomInt(4, 100); const add = randomInt(5, 80); const total = answer + add; category = "Algebra";
+    question = `If x + ${add} = ${total}, what is x?`; sourceKey = `math:equation:${answer}:${add}`; spread = randomInt(2, 8);
+  } else if (mode === "perimeter") {
+    const width = randomInt(3, 40); const length = randomInt(width + 1, width + 50); answer = 2 * (length + width); category = "Geometry";
+    question = `Find the perimeter of a ${length} cm by ${width} cm rectangle.`; sourceKey = `math:perimeter:${length}:${width}`; spread = 2 * width;
+  } else if (mode === "area") {
+    const width = randomInt(3, 35); const length = randomInt(4, 45); answer = length * width; category = "Geometry";
+    question = `Find the area of a ${length} cm by ${width} cm rectangle.`; sourceKey = `math:area:${length}:${width}`; spread = width;
+  } else if (mode === "ratio") {
+    const left = randomInt(2, 12); const right = randomInt(2, 12); const scale = randomInt(3, 30); answer = right * scale;
+    question = `A ratio is ${left}:${right}. If the first value is ${left * scale}, what is the second?`; sourceKey = `math:ratio:${left}:${right}:${scale}`; spread = scale;
+  } else if (mode === "compound") {
+    const a = randomInt(12, 80); const b = randomInt(3, 20); const c = randomInt(2, 14); answer = a + b * c;
+    question = `Using order of operations, what is ${a} + ${b} × ${c}?`; sourceKey = `math:compound:${a}:${b}:${c}`; spread = b;
+  } else if (mode === "linear") {
+    answer = randomInt(3, 60); const coefficient = randomInt(2, 12); const add = randomInt(5, 70); const total = coefficient * answer + add; category = "Algebra";
+    question = `Solve ${coefficient}x + ${add} = ${total}. What is x?`; sourceKey = `math:linear:${coefficient}:${add}:${total}`; spread = coefficient;
+  } else if (mode === "power") {
+    const base = randomInt(2, 12); const exponent = randomInt(3, 5); answer = base ** exponent;
+    question = `What is ${base} to the power of ${exponent}?`; sourceKey = `math:power:${base}:${exponent}`; spread = base ** (exponent - 1);
+  } else if (mode === "gcd" || mode === "lcm") {
+    const factor = randomInt(2, 18); const leftMultiplier = pick([2, 3, 5, 7]); const rightMultiplier = pick([4, 5, 7, 11]); const a = factor * leftMultiplier; const b = factor * rightMultiplier;
+    answer = mode === "gcd" ? gcd(a, b) : Math.abs(a * b) / gcd(a, b);
+    question = `What is the ${mode === "gcd" ? "greatest common divisor" : "least common multiple"} of ${a} and ${b}?`; sourceKey = `math:${mode}:${a}:${b}`; spread = factor;
+  } else if (mode === "increase") {
+    const original = randomInt(20, 500); const percent = pick([10, 20, 25, 50, 75, 100]); answer = original * (100 + percent) / 100;
+    question = `${original} is increased by ${percent}%. What is the new value?`; sourceKey = `math:increase:${original}:${percent}`; spread = Math.max(2, original * percent / 100);
+  } else if (mode === "ratioShare") {
+    const a = randomInt(2, 9); const b = randomInt(2, 9); const unit = randomInt(5, 40); const total = (a + b) * unit; answer = a * unit;
+    question = `${total} is divided in the ratio ${a}:${b}. What is the first share?`; sourceKey = `math:ratio-share:${total}:${a}:${b}`; spread = unit;
+  } else {
+    const root = randomInt(8, 60); answer = root; question = `What is the square root of ${root * root}?`; sourceKey = `math:sqrt:${root}`; spread = randomInt(2, 8);
+  }
+  return baseQuestion({ category, difficulty, question, answer, answerType: "number", options: numericOptions(answer, spread), sourceKey });
+}
+
+function scienceCalculation(difficulty = "easy") {
+  const modes = difficulty === "easy" ? ["speed", "force", "voltage"] : difficulty === "moderate" ? ["work", "power", "density", "charge"] : ["kinetic", "potential", "wave", "pressure"];
+  const mode = pick(modes);
+  let question; let answer; let sourceKey; let spread = 2;
+  if (mode === "speed") {
+    const time = randomInt(2, 40); const speed = randomInt(3, 80); const distance = time * speed; answer = speed; question = `An object travels ${distance} m in ${time} s. What is its speed in m/s?`; sourceKey = `physics:speed:${distance}:${time}`; spread = randomInt(1, 6);
+  } else if (mode === "force") {
+    const mass = randomInt(2, 50); const acceleration = randomInt(2, 20); answer = mass * acceleration; question = `What force in newtons accelerates ${mass} kg at ${acceleration} m/s²?`; sourceKey = `physics:force:${mass}:${acceleration}`; spread = mass;
+  } else if (mode === "voltage") {
+    const current = randomInt(2, 20); const resistance = randomInt(2, 30); answer = current * resistance; question = `Using V = IR, find the voltage when current is ${current} A and resistance is ${resistance} ohms.`; sourceKey = `physics:voltage:${current}:${resistance}`; spread = resistance;
+  } else if (mode === "work") {
+    const force = randomInt(5, 100); const distance = randomInt(2, 40); answer = force * distance; question = `How much work in joules is done by a ${force} N force over ${distance} m?`; sourceKey = `physics:work:${force}:${distance}`; spread = force;
+  } else if (mode === "power") {
+    const seconds = randomInt(2, 30); const power = randomInt(10, 200); const work = seconds * power; answer = power; question = `${work} J of work is done in ${seconds} s. What is the power in watts?`; sourceKey = `physics:power:${work}:${seconds}`; spread = randomInt(2, 10);
+  } else if (mode === "density") {
+    const volume = randomInt(2, 30); const density = randomInt(2, 25); const mass = volume * density; answer = density; question = `A sample has mass ${mass} g and volume ${volume} cm³. What is its density in g/cm³?`; sourceKey = `physics:density:${mass}:${volume}`; spread = randomInt(1, 4);
+  } else if (mode === "charge") {
+    const seconds = randomInt(2, 50); const current = randomInt(2, 25); answer = seconds * current; question = `A current of ${current} A flows for ${seconds} s. How much charge passes in coulombs?`; sourceKey = `physics:charge:${current}:${seconds}`; spread = current;
+  } else if (mode === "kinetic") {
+    const mass = randomInt(2, 30); const speed = randomInt(2, 20); answer = mass * speed * speed / 2; question = `Find the kinetic energy in joules of a ${mass} kg object moving at ${speed} m/s.`; sourceKey = `physics:kinetic:${mass}:${speed}`; spread = mass * speed;
+  } else if (mode === "potential") {
+    const mass = randomInt(2, 30); const height = randomInt(2, 40); answer = mass * 10 * height; question = `Using g = 10 m/s², find the potential energy of ${mass} kg at a height of ${height} m.`; sourceKey = `physics:potential:${mass}:${height}`; spread = mass * 10;
+  } else if (mode === "wave") {
+    const frequency = randomInt(2, 80); const wavelength = randomInt(2, 25); answer = frequency * wavelength; question = `A wave has frequency ${frequency} Hz and wavelength ${wavelength} m. What is its speed in m/s?`; sourceKey = `physics:wave:${frequency}:${wavelength}`; spread = frequency;
+  } else {
+    const area = randomInt(2, 50); const pressure = randomInt(10, 200); const force = area * pressure; answer = pressure; question = `A force of ${force} N acts on ${area} m². What is the pressure in pascals?`; sourceKey = `physics:pressure:${force}:${area}`; spread = randomInt(2, 10);
+  }
+  return baseQuestion({ category: "Physics", difficulty, question, answer, answerType: "number", options: numericOptions(answer, spread), sourceKey });
+}
+
+function scienceFactQuestion(difficulty = "easy") {
+  const mode = pick(["symbol", "number", "element", "unit", "unitSymbol", "planetOrder", "planetMoons"]);
+  if (["symbol", "number", "element"].includes(mode)) {
+    const [name, symbol, atomicNumber] = pick(ELEMENTS);
+    if (mode === "symbol") return baseQuestion({ category: "Chemistry", difficulty, question: `What is the chemical symbol for ${name}?`, answer: symbol, answerType: "word", options: otherValues(ELEMENTS, symbol, (item) => item[1]), sourceKey: `chem:symbol:${name}` });
+    if (mode === "number") return baseQuestion({ category: "Chemistry", difficulty, question: `What is the atomic number of ${name}?`, answer: atomicNumber, answerType: "number", options: numericOptions(atomicNumber, randomInt(1, 4)), sourceKey: `chem:number:${name}` });
+    return baseQuestion({ category: "Chemistry", difficulty, question: `Which element has the symbol ${symbol}?`, answer: name, answerType: "word", options: otherValues(ELEMENTS, name, (item) => item[0]), sourceKey: `chem:element:${symbol}` });
+  }
+  if (mode === "unit" || mode === "unitSymbol") {
+    const [quantity, unit, symbol] = pick(PHYSICS_UNITS);
+    if (mode === "unit") return baseQuestion({ category: "Physics", difficulty, question: `What is the SI unit of ${quantity}?`, answer: unit, answerType: "word", options: otherValues(PHYSICS_UNITS, unit, (item) => item[1]), sourceKey: `physics:unit:${quantity}` });
+    return baseQuestion({ category: "Physics", difficulty, question: `What is the standard symbol for the ${unit}?`, answer: symbol, answerType: "phrase", options: otherValues(PHYSICS_UNITS, symbol, (item) => item[2]), sourceKey: `physics:unit-symbol:${unit}` });
+  }
+  const [planet, order, moons] = pick(PLANETS);
+  if (mode === "planetOrder") return baseQuestion({ category: "Space Science", difficulty, question: `What position is ${planet} from the Sun?`, answer: order, answerType: "number", options: numericOptions(order, 1), sourceKey: `space:order:${planet}` });
+  return baseQuestion({ category: "Space Science", difficulty, question: `How many confirmed moons does ${planet} have in this quiz's reference set?`, answer: moons, answerType: "number", options: numericOptions(moons, Math.max(1, randomInt(1, 8))), sourceKey: `space:moons:${planet}` });
+}
+
+function scienceQuestion(difficulty = "easy") {
+  return Math.random() < 0.82 ? scienceCalculation(difficulty) : scienceFactQuestion(difficulty);
+}
+
+function reasoningQuestion(difficulty = "easy") {
+  const mode = difficulty === "difficult" ? pick(["alternating", "fibonacci", "growing"]) : pick(["arithmetic", "growing", "fibonacci"]);
+  let terms; let answer; let sourceKey;
+  if (mode === "arithmetic") {
+    const start = randomInt(1, 100); const step = randomInt(2, 25); terms = [start, start + step, start + step * 2, start + step * 3]; answer = start + step * 4; sourceKey = `reason:arithmetic:${start}:${step}`;
+  } else if (mode === "fibonacci") {
+    const a = randomInt(1, 30); const b = randomInt(a + 1, a + 30); terms = [a, b, a + b, a + 2 * b]; answer = 2 * a + 3 * b; sourceKey = `reason:fibonacci:${a}:${b}`;
+  } else if (mode === "alternating") {
+    const start = randomInt(10, 100); const up = randomInt(5, 30); const down = randomInt(2, up - 1); terms = [start, start + up, start + up - down, start + 2 * up - down]; answer = start + 2 * up - 2 * down; sourceKey = `reason:alternating:${start}:${up}:${down}`;
+  } else {
+    const start = randomInt(1, 50); const step = randomInt(1, 10); terms = [start, start + step, start + step * 3, start + step * 6]; answer = start + step * 10; sourceKey = `reason:growing:${start}:${step}`;
+  }
+  return baseQuestion({ category: "Logical Reasoning", difficulty, question: `Find the next number: ${terms.join(", ")}, ?`, answer, answerType: "number", options: numericOptions(answer, randomInt(2, 10)), sourceKey });
+}
+
+function scrambleQuestion(difficulty = "easy") {
   const [answer, clue] = pick(WORDS);
   let scrambled = shuffle(answer.split("")).join("");
   if (scrambled === answer) scrambled = answer.slice(1) + answer[0];
@@ -226,11 +418,19 @@ function scrambleQuestion() {
 
 function generateQuestion({ contest = false, recentKeys = [] } = {}) {
   const recent = new Set(recentKeys);
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const question = pick([factQuestion, factQuestion, factQuestion, factQuestion, factQuestion, factQuestion, mathQuestion, mathQuestion, mathQuestion, scrambleQuestion])();
+  const difficulty = nextDifficulty();
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const roll = Math.random();
+    const question = roll < 0.53
+      ? freshMathQuestion(difficulty)
+      : roll < 0.87
+        ? scienceQuestion(difficulty)
+        : roll < 0.97
+          ? reasoningQuestion(difficulty)
+          : factQuestion(difficulty);
     if (!recent.has(question.sourceKey) && (!contest || question.options.length === 4)) return question;
   }
-  const fallback = mathQuestion();
+  const fallback = freshMathQuestion(difficulty);
   fallback.sourceKey = `${fallback.sourceKey}:${Date.now()}`;
   return fallback;
 }

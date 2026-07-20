@@ -1477,6 +1477,30 @@ function confirmOptimisticMessage(pendingId, message) {
   return true;
 }
 
+function sendQuizRoomSocketMessage(roomId, body) {
+  return new Promise((resolve, reject) => {
+    if (!state.socket?.connected) return reject(new Error("Live Quiz connection is reconnecting."));
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("Quiz answer confirmation timed out. Check your connection before retrying."));
+    }, 8000);
+    state.socket.emit("quiz:answer", { roomId: Number(roomId), body }, (result = {}) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!result.ok) {
+        const error = new Error(result.error || "Answer could not be sent.");
+        error.code = result.code;
+        reject(error);
+        return;
+      }
+      resolve(result.message);
+    });
+  });
+}
+
 function renderIntruderMessage(payload) {
   const type = String(payload?.type || "");
   if (type === "alert") {
@@ -4910,7 +4934,17 @@ function bindEvents() {
         $("#charCount").textContent = "0/1200";
         renderMessages();
       }
-      const sent = await api(`/api/chat/rooms/${roomId}/messages`, { method: "POST", body: requestBody });
+      const quizRoom = currentQuizRoom();
+      const useQuizSocket = Boolean(
+        optimistic
+        && state.socket?.connected
+        && Number(roomId) === Number(quizRoom?.id)
+        && !replyToId
+        && !body.startsWith("/")
+      );
+      const sent = useQuizSocket
+        ? await sendQuizRoomSocketMessage(roomId, body)
+        : await api(`/api/chat/rooms/${roomId}/messages`, { method: "POST", body: requestBody });
       if (Number(state.currentRoomId) === Number(roomId)) {
         const alreadyConfirmed = sent.id && state.messages.some((message) => Number(message.id) === Number(sent.id));
         if (!sent.private && !alreadyConfirmed && !confirmOptimisticMessage(pendingId, sent)) {
