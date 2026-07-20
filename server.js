@@ -52,8 +52,8 @@ const io = SocketServer
   ? new SocketServer(server, {
       cors: { origin: (origin, callback) => callback(null, socketOriginAllowed(origin)), credentials: true },
       allowRequest: (req, callback) => callback(null, socketOriginAllowed(req.headers.origin)),
-      transports: ["websocket"],
-      allowUpgrades: false,
+      transports: ["polling", "websocket"],
+      allowUpgrades: true,
       pingInterval: 25000,
       pingTimeout: 20000,
       maxHttpBufferSize: 1e6,

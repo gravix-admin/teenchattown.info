@@ -4436,8 +4436,8 @@ function connectEvents() {
   if (window.io) {
     state.socket = window.io({
       auth: { token: state.token },
-      transports: ["websocket"],
-      upgrade: false,
+      transports: ["polling", "websocket"],
+      upgrade: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 700,
