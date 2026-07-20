@@ -4447,29 +4447,21 @@ function connectEvents() {
       state.socket.on(eventName, handler);
     });
     state.socket.on("connect", () => {
+      const needsCatchUp = Boolean(state.me && Date.now() - state.lastSyncAt > 20000);
       state.socket.emit("presence");
       const quizRoom = state.rooms.find((room) => String(room.name).toLowerCase() === "quiz room");
       if (!state.isGuest && Number(state.currentRoomId) === Number(quizRoom?.id)) state.socket.emit("quiz:subscribe", { roomId: quizRoom.id });
       if (!state.isGuest && window.QuizGame?.isOpen?.()) state.socket.emit("quiz:subscribe", { contest: true });
       clearInterval(state.presenceTimer);
       state.presenceTimer = setInterval(() => state.socket?.connected && state.socket.emit("presence"), 45000);
-      if (state.me && Date.now() - state.lastSyncAt > 20000) refreshVisibleData().catch(() => {});
-    });
-    state.socket.on("reconnect", () => {
-      refreshVisibleData().catch(() => {});
+      if (needsCatchUp) refreshVisibleData({ force: true }).catch(() => {});
     });
     state.socket.on("connect_error", (error) => {
       if (state.isGuest) {
         console.warn("Guest Random Talk connection failed:", error.message);
-        toast("Random Talk is reconnecting. You can search when the live connection returns.");
         return;
       }
-      console.warn("Socket connection failed; using fallback event stream.", error.message);
-      state.preferEventSource = true;
-      clearInterval(state.presenceTimer);
-      state.socket?.disconnect();
-      state.socket = null;
-      connectEventSourceFallback();
+      console.warn("Live connection interrupted; Socket.IO is reconnecting.", error.message);
     });
     return;
   }
